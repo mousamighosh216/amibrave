@@ -194,18 +194,18 @@ def build_html(
 <head>
 <meta charset="UTF-8">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-
+  /* System fonts only — no external network calls */
+ 
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-
+ 
   body {{
-    font-family: 'Inter', Arial, sans-serif;
+    font-family: Arial, 'Helvetica Neue', sans-serif;
     font-size: 12px;
     color: #1a1a1a;
     background: #ffffff;
     padding: 0;
   }}
-
+ 
   /* ── Page header ── */
   .page-header {{
     background: #ffffff;
@@ -232,7 +232,7 @@ def build_html(
     color: #666;
     line-height: 1.7;
   }}
-
+ 
   /* ── Score row ── */
   .score-row {{
     display: flex;
@@ -252,7 +252,7 @@ def build_html(
   .score-num {{
     font-size: 22px;
     font-weight: 700;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Courier New', Courier, monospace;
   }}
   .score-lbl {{
     font-size: 10px;
@@ -261,7 +261,7 @@ def build_html(
     letter-spacing: 0.4px;
     margin-top: 3px;
   }}
-
+ 
   /* ── Time info bar ── */
   .time-bar {{
     padding: 8px 28px;
@@ -273,7 +273,7 @@ def build_html(
     justify-content: space-between;
   }}
   .time-bar strong {{ color: {NTA_ORANGE}; }}
-
+ 
   /* ── Section title ── */
   .section-title {{
     font-size: 12px;
@@ -284,7 +284,7 @@ def build_html(
     padding: 14px 28px 6px;
     border-bottom: 1px solid #eeeeee;
   }}
-
+ 
   /* ── Question block ── */
   .q-block {{
     padding: 14px 28px;
@@ -296,7 +296,7 @@ def build_html(
   .q-block.wrong    {{ border-left-color: {NTA_RED}; }}
   .q-block.answered {{ border-left-color: {NTA_DARKBLUE}; }}
   .q-block.skip     {{ border-left-color: #cccccc; }}
-
+ 
   .q-top {{
     display: flex;
     justify-content: space-between;
@@ -304,7 +304,7 @@ def build_html(
     margin-bottom: 7px;
   }}
   .q-meta {{
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Courier New', Courier, monospace;
     font-size: 11px;
     color: #888;
     font-weight: 500;
@@ -322,7 +322,7 @@ def build_html(
     color: #1a1a1a;
     margin-bottom: 10px;
   }}
-
+ 
   /* ── Options ── */
   .opt-row {{
     display: flex;
@@ -336,13 +336,13 @@ def build_html(
     line-height: 1.55;
   }}
   .opt-lbl {{
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Courier New', Courier, monospace;
     font-weight: 600;
     min-width: 18px;
     color: #666;
     flex-shrink: 0;
   }}
-
+ 
   /* ── Answer row ── */
   .ans-row {{
     font-size: 12px;
@@ -355,7 +355,7 @@ def build_html(
     color: #888;
     font-weight: 500;
   }}
-
+ 
   /* ── Page footer ── */
   .page-footer {{
     position: fixed;
@@ -370,7 +370,7 @@ def build_html(
     display: flex;
     justify-content: space-between;
   }}
-
+ 
   @page {{
     margin: 0 0 36px 0;
     size: A4;
@@ -378,7 +378,7 @@ def build_html(
 </style>
 </head>
 <body>
-
+ 
 <div class="page-header">
   <div>
     <div class="brand">Amibrave</div>
@@ -390,23 +390,23 @@ def build_html(
     Total questions: {len(questions)}
   </div>
 </div>
-
+ 
 {score_html}
-
+ 
 <div class="time-bar">
   <span>Marking scheme: <strong>{marking.upper()}</strong></span>
   <span>Questions attempted: <strong>{sum(1 for i in range(len(questions)) if answers.get(str(i)))}</strong> / {len(questions)}</span>
 </div>
-
+ 
 <div class="section-title">Question-wise Summary</div>
-
+ 
 {rows_html}
-
+ 
 <div class="page-footer">
   <span>Amibrave — GATE Practice</span>
   <span>Confidential — For personal use only</span>
 </div>
-
+ 
 </body>
 </html>"""
 
@@ -446,6 +446,9 @@ def generate_pdf(payload: dict) -> tuple[Optional[bytes], Optional[str]]:
         )
 
         pdf_bytes = HTML(string=html_str).write_pdf()
+        if pdf_bytes is None:
+          raise ValueError("PDF generation failed")
+        
         logger.info(f"PDF generated: {len(pdf_bytes)//1024}KB, {len(questions)} questions")
         return pdf_bytes, None
 

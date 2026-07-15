@@ -45,13 +45,10 @@ def dynamic_line_tolerance(words: list[dict]) -> float:
     if not words:
         return 5.0
     logger.info(f"First word sample: {words[:3]}")
-    heights = [
-        w["bottom"] - w["top"]
-        for w in words
-        if "top" in w and "bottom" in w
-    ]
-
-    return max(3, min(int(sum(heights)/len(heights)*0.6),12)) if heights else 5
+    heights = [w["bottom"] - w["top"] for w in words if w.get("bottom",0) > w.get("top",0)]
+    if not heights:
+        return 5.0
+    return statistics.median(heights) * 0.5
 
 
 def detect_columns(words: list[dict], page_width: float) -> list[float]:
@@ -113,13 +110,13 @@ def group_words_into_lines(words: list[dict], tolerance: float) -> list[dict]:
         placed = False
         for line in lines:
             if (line["column"] == word.get("column", 0) and
-                    abs(word["top"] - line["top"]) <= tolerance):
+                    abs(word.get("top", word.get("y0",0)) - line["y0"]) <= tolerance):
                 line["words"].append(word)
                 placed = True
                 break
         if not placed:
             lines.append({
-                "top"    : word["top"],
+                "y0"    : word.get("top", word.get("y0",0)),
                 "column": word.get("column", 0),
                 "words" : [word],
             })
@@ -130,7 +127,7 @@ def group_words_into_lines(words: list[dict], tolerance: float) -> list[dict]:
         line["text"] = " ".join(w["text"] for w in line["words"])
 
     # Sort lines top to bottom, then left column before right column
-    lines.sort(key=lambda l: (round(l["top"] / 10), l["column"]))
+    lines.sort(key=lambda l: (round(l["y0"] / 10), l["column"]))
     return lines
 
 
@@ -148,7 +145,12 @@ Q_MARKER_PATTERNS = [
 def detect_question_marker(text: str) -> Optional[int]:
     """Return question number if line is a question marker, else None."""
     t = text.strip()
-    for pat in Q_MARKER_PATTERNS:
+    # Extended patterns including inline (Q.1 text on same line)
+    all_patterns = Q_MARKER_PATTERNS + [
+        r"^Q\.?\s*(\d+)[\s\.\):]",   # Q.1 text, Q1 text, Q.1. text
+        r"^Q\s+(\d+)[\s\.\):]",        # Q 1 text
+    ]
+    for pat in all_patterns:
         m = re.match(pat, t, re.IGNORECASE)
         if m:
             try:
@@ -235,7 +237,8 @@ def detect_dominant_option_pattern(lines: list[dict]) -> Optional[str]:
             counts[ptype] = counts.get(ptype, 0) + 1
     if not counts:
         return None
-    return max(counts.items(), key=lambda item: item[1])[0]
+    # Use a lambda to avoid type-checker issues with dict.get overloads
+    return max(counts, key=lambda k: counts[k])
 
 
 # ── Core page parser ──────────────────────────────────────────────────────────
@@ -265,6 +268,10 @@ def parse_page_with_coordinates(page) -> tuple[list[dict], list[str], float]:
 
     # Assign column to each word
     for word in words:
+        if "y0" not in word:
+            word["y0"] = word.get("top", 0)
+        if "y1" not in word:
+            word["y1"] = word.get("bottom", 0)
         word["column"] = assign_column(word["x0"], boundaries)
 
     # ── Group into lines ─────────────────────────────────────────────────────
@@ -282,7 +289,7 @@ def parse_page_with_coordinates(page) -> tuple[list[dict], list[str], float]:
 
     # ── Estimate expected questions from marker rhythm ───────────────────────
     if len(marker_line_indices) >= 2:
-        marker_y   = [lines[i]["top"] for i in marker_line_indices]
+        marker_y   = [lines[i]["y0"] for i in marker_line_indices]
         diffs      = [marker_y[j+1] - marker_y[j] for j in range(len(marker_y)-1)]
         avg_gap    = statistics.median(diffs) if diffs else page.height
         expected   = max(1, round(page.height / avg_gap))
@@ -440,7 +447,7 @@ def parse_ocr_text(text: str, page_num: int) -> tuple[list[dict], list[str]]:
         blocks[current_num] = current_buf
 
     for num, buf_lines in blocks.items():
-        fake_lines = [{"text": l, "top": i * 20, "column": 0} for i, l in enumerate(buf_lines)]
+        fake_lines = [{"text": l, "y0": i * 20, "column": 0} for i, l in enumerate(buf_lines)]
         q, w = build_question_from_block(num, "", fake_lines, page_num)
         warnings.extend(w)
         if q:

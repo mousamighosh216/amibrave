@@ -7,7 +7,7 @@
 "use strict";
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const BACKEND_URL = "https://your-render-app.onrender.com";
+const BACKEND_URL =  "http://localhost:5000";
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 

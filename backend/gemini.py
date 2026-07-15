@@ -85,12 +85,10 @@ Rules:
 # ---------------------------------------------------------------------------
 
 def image_to_base64(image: Image.Image) -> str:
-    """Convert a PIL Image to low-color black-and-white base64 string for Gemini."""
-    bw_image = image.convert("L").point(lambda x: 255 if cast(int, x) > 128 else 0, "1")
+    """Convert a PIL Image to base64 string for Gemini."""
     buffer = io.BytesIO()
-    bw_image.save(buffer, format="PNG", optimize=True)
+    image.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
 
 def parse_gemini_response(response_text: str) -> Optional[dict]:
     """
@@ -113,71 +111,68 @@ def parse_gemini_response(response_text: str) -> Optional[dict]:
 
 
 def extract_page_with_gemini(
-    client,
+    model,
     page_image: Image.Image,
     page_num: int
 ) -> tuple[list[dict], list[str], Optional[tuple[dict, int]]]:
     """
     Send a single page image to Gemini for question extraction.
-
+ 
     Returns:
         questions   — list of parsed question dicts
         warnings    — list of warning strings from this page
         error       — (error_dict, http_status) tuple if fatal, else None
     """
     try:
-        buffer = io.BytesIO()
-        page_image.save(buffer, format="PNG")
-
-        image_bytes = buffer.getvalue()
-
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
+        img_b64 = image_to_base64(page_image)
+ 
+        response = model.models.generate_content(
+            model="gemini-1.5-flash",
             contents=[
                 EXTRACTION_PROMPT,
-                types.Part.from_bytes(data=image_bytes,mime_type="image/png")
+                types.Part.from_bytes(
+                    data=base64.b64decode(img_b64),
+                    mime_type="image/png"
+                )
             ]
         )
-
+ 
         if not response or not response.text:
             logger.warning(f"Gemini returned empty response for page {page_num}")
             return [], [f"Gemini returned empty response for page {page_num}"], None
-
+ 
         parsed = parse_gemini_response(response.text)
-
+ 
         if parsed is None:
             logger.warning(f"Could not parse Gemini JSON for page {page_num}")
-            return [], [  f"Could not parse Gemini output for page {page_num}" ], None
-
+            return [], [f"Could not parse Gemini output for page {page_num}"], None
+ 
         questions = parsed.get("questions", [])
         page_warnings = parsed.get("page_warnings", [])
-
+ 
+        # Validate and sanitise each question
         clean_questions = []
-
         for q in questions:
-            if not isinstance(q, dict): continue
-
-            if not q.get("text") or not q.get("num"): continue
-
-            q["type"] = q.get("type","nat").lower()
-
+            if not isinstance(q, dict):
+                continue
+            if not q.get("text") or not q.get("num"):
+                continue
+            q["type"] = q.get("type", "nat").lower()
             if q["type"] not in ("mcq", "nat"):
                 q["type"] = "nat"
             q["options"] = q.get("options", [])
             q["source"] = "gemini"
-
             clean_questions.append(q)
-
+ 
         return clean_questions, page_warnings, None
-
-
+ 
     except Exception as e:
         error_str = str(e).lower()
-
+ 
         if "quota" in error_str or "rate" in error_str or "429" in error_str:
             logger.error(f"Gemini quota exceeded on page {page_num}: {e}")
             return [], [], err_gemini_quota()
-
+ 
         logger.error(f"Gemini error on page {page_num}: {e}")
         return [], [f"Gemini failed on page {page_num}: {str(e)}"], None
 
