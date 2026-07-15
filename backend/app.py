@@ -10,7 +10,8 @@ import threading
 from datetime import datetime
 from functools import wraps
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
+import io
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -20,6 +21,7 @@ from errors import (
     warn_file_near_limit
 )
 from parser import extract_questions, extract_answer_key
+from pdf_generator import generate_pdf
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -172,7 +174,7 @@ def health():
 
 @app.route("/extract", methods=["POST"])
 @with_concurrency_limit
-# @with_timeout
+# @with_timeout // not working with this
 def extract():
     """
     POST /extract
@@ -216,6 +218,50 @@ def extract_key():
         response_body["warnings"] = upload_warnings + response_body["warnings"]
 
     return jsonify(response_body), status
+
+
+# ---------------------------------------------------------------------------
+# PDF generation endpoint
+# ---------------------------------------------------------------------------
+
+@app.route("/generate-pdf", methods=["POST"])
+@with_concurrency_limit
+@with_timeout
+def generate_pdf_route():
+    """
+    POST /generate-pdf
+    Body: JSON payload with questions, answers, marked, statuses,
+          marking, customMarks, timeTaken
+    Returns: PDF file download
+    """
+    if not request.is_json:
+        body, status = err_server("Request must be JSON with Content-Type: application/json")
+        return jsonify(body), status
+
+    payload = request.get_json(silent=True)
+    if not payload:
+        body, status = err_server("Empty or invalid JSON payload")
+        return jsonify(body), status
+
+    questions = payload.get("questions", [])
+    if not questions:
+        body, status = err_server("No questions in payload")
+        return jsonify(body), status
+
+    logger.info(f"Generating PDF: {len(questions)} questions")
+
+    pdf_bytes, error = generate_pdf(payload)
+
+    if error:
+        body, status = err_server(f"PDF generation failed: {error}")
+        return jsonify(body), status
+
+    return send_file(
+        io.BytesIO(pdf_bytes),
+        mimetype        = "application/pdf",
+        as_attachment   = True,
+        download_name   = f"amibrave_results_{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    )
 
 
 # ---------------------------------------------------------------------------

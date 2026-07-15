@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: amibrave-backend
+    runtime: python
+    region: oregon
+    plan: free
+
+    # System dependencies for WeasyPrint + pytesseract + PyMuPDF
+    buildCommand: |
+      apt-get update -y &&
+      apt-get install -y
+        tesseract-ocr
+        libpango-1.0-0
+        libpangoft2-1.0-0
+        libpangocairo-1.0-0
+        libcairo2
+        libgdk-pixbuf2.0-0
+        libffi-dev
+        libxml2
+        libxslt1.1
+        shared-mime-info
+        poppler-utils &&
+      pip install -r requirements.txt
+
+    startCommand: gunicorn app:app --workers 2 --timeout 90 --bind 0.0.0.0:$PORT
+
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false          # set manually in Render dashboard
+
+      - key: ALLOWED_ORIGINS
+        value: "https://mousamighosh216.github.io"   # update after deploy
+
+      - key: FLASK_ENV
+        value: production
+
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+
+    healthCheckPath: /health

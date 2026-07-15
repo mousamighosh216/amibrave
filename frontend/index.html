@@ -3,218 +3,293 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Amibrave — GATE Practice Paper</title>
+  <title>Amibrave — GATE Practice</title>
 
-  <!-- Fonts -->
+  <!-- Fonts: Inter + JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 
   <!-- Phosphor Icons -->
   <script src="https://unpkg.com/@phosphor-icons/web@2.1.1/src/index.js"></script>
 
-  <!-- KaTeX for math rendering -->
+  <!-- KaTeX -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
-    onload="window.katexReady = true"></script>
+    onload="window.katexReady=true"></script>
 
-  <!-- PDF.js (fallback client-side extraction) -->
+  <!-- PDF.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-  <!-- ── Upload Screen ──────────────────────────────────────────── -->
-  <section id="s-upload" class="screen active" aria-label="Upload question paper">
-    <header class="brand-header">
-      <span class="brand-logo">
-        <i class="ph ph-atom" aria-hidden="true"></i>
-      </span>
+<!-- ── UPLOAD SCREEN ──────────────────────────────────────────────────────── -->
+<div id="s-upload" class="screen active">
+  <div class="upload-page">
+    <div class="upload-brand">
+      <i class="ph ph-atom" aria-hidden="true"></i>
       <div>
-        <h1 class="brand-name">Amibrave</h1>
-        <p class="brand-tagline">GATE Practice Paper Generator</p>
-      </div>
-    </header>
-
-    <div class="upload-grid">
-      <!-- Question paper upload -->
-      <div class="card">
-        <div class="card-header">
-          <i class="ph ph-file-text card-icon" aria-hidden="true"></i>
-          <div>
-            <h2 class="card-title">Question Paper</h2>
-            <p class="card-subtitle">Upload your GATE paper PDF</p>
-          </div>
-        </div>
-        <div class="drop-zone" id="qz" role="button" tabindex="0"
-          aria-label="Upload question paper PDF"
-          onclick="document.getElementById('qf').click()"
-          onkeydown="if(event.key==='Enter')this.click()">
-          <input type="file" id="qf" accept=".pdf" aria-label="Question paper file input" />
-          <i class="ph ph-upload-simple drop-icon" aria-hidden="true"></i>
-          <p class="drop-label">Drop PDF here or <span class="drop-link">browse</span></p>
-          <p class="drop-hint">Digital PDFs · Max 10 MB</p>
-        </div>
-        <div class="file-badge" id="q-badge" aria-live="polite"></div>
-      </div>
-
-      <!-- Answer key upload -->
-      <div class="card">
-        <div class="card-header">
-          <i class="ph ph-key card-icon" aria-hidden="true"></i>
-          <div>
-            <h2 class="card-title">Answer Key <span class="optional-label">Optional</span></h2>
-            <p class="card-subtitle">Upload separately if available</p>
-          </div>
-        </div>
-        <div class="drop-zone" id="az" role="button" tabindex="0"
-          aria-label="Upload answer key PDF"
-          onclick="document.getElementById('af').click()"
-          onkeydown="if(event.key==='Enter')this.click()">
-          <input type="file" id="af" accept=".pdf" aria-label="Answer key file input" />
-          <i class="ph ph-key drop-icon" aria-hidden="true"></i>
-          <p class="drop-label">Drop PDF here or <span class="drop-link">browse</span></p>
-          <p class="drop-hint">Skip if unavailable</p>
-        </div>
-        <div class="file-badge" id="a-badge" aria-live="polite"></div>
+        <div class="upload-brand-name">Amibrave</div>
+        <div class="upload-brand-sub">GATE Practice Paper Generator</div>
       </div>
     </div>
 
-    <!-- Settings -->
-    <div class="card settings-card">
-      <div class="card-header">
-        <i class="ph ph-sliders card-icon" aria-hidden="true"></i>
-        <h2 class="card-title">Settings</h2>
-      </div>
-      <div class="settings-grid">
-        <div class="field">
-          <label class="field-label" for="time-limit">Time limit (minutes)</label>
-          <input type="number" id="time-limit" value="180" min="5" max="360" class="field-input" />
+    <div class="upload-cards">
+      <div class="upload-card">
+        <div class="upload-card-title">
+          <i class="ph ph-file-pdf" aria-hidden="true"></i>
+          Question Paper
         </div>
-        <div class="field">
-          <label class="field-label" for="marking">Marking scheme</label>
-          <select id="marking" class="field-input">
-            <option value="gate">GATE Standard (+2 / −0.67 MCQ)</option>
+        <div class="drop-zone" id="qz" tabindex="0" role="button"
+          aria-label="Upload question paper PDF"
+          onclick="document.getElementById('qf').click()"
+          onkeydown="if(event.key==='Enter')this.click()">
+          <input type="file" id="qf" accept=".pdf" />
+          <i class="ph ph-upload-simple drop-icon" aria-hidden="true"></i>
+          <div class="drop-label">Drop PDF or <span class="drop-link">browse</span></div>
+          <div class="drop-hint">Digital PDFs · Max 10 MB</div>
+        </div>
+        <div class="file-info" id="q-info"></div>
+      </div>
+
+      <div class="upload-card">
+        <div class="upload-card-title">
+          <i class="ph ph-key" aria-hidden="true"></i>
+          Answer Key <span class="opt-tag">Optional</span>
+        </div>
+        <div class="drop-zone" id="az" tabindex="0" role="button"
+          aria-label="Upload answer key PDF"
+          onclick="document.getElementById('af').click()"
+          onkeydown="if(event.key==='Enter')this.click()">
+          <input type="file" id="af" accept=".pdf" />
+          <i class="ph ph-key drop-icon" aria-hidden="true"></i>
+          <div class="drop-label">Drop PDF or <span class="drop-link">browse</span></div>
+          <div class="drop-hint">Skip if unavailable</div>
+        </div>
+        <div class="file-info" id="a-info"></div>
+      </div>
+    </div>
+
+    <div class="upload-card" style="margin-top:16px">
+      <div class="upload-card-title">
+        <i class="ph ph-sliders-horizontal" aria-hidden="true"></i>
+        Settings
+      </div>
+      <div class="settings-row">
+        <div class="field-group">
+          <label class="field-lbl" for="time-limit">Duration (minutes)</label>
+          <input type="number" id="time-limit" class="field-inp" value="180" min="5" max="360" />
+        </div>
+        <div class="field-group">
+          <label class="field-lbl" for="marking">Marking Scheme</label>
+          <select id="marking" class="field-inp">
+            <option value="gate">GATE Standard (+2 / −0.67)</option>
             <option value="simple">Simple (+1 / 0)</option>
             <option value="custom">Custom</option>
           </select>
         </div>
-        <div class="field" id="custom-fields" style="display:none">
-          <label class="field-label">Custom marks</label>
-          <div class="inline-fields">
-            <input type="number" id="mark-correct" value="1" class="field-input" placeholder="Correct" />
-            <input type="number" id="mark-wrong" value="0" class="field-input" placeholder="Wrong" />
+        <div class="field-group" id="custom-fields" style="display:none">
+          <label class="field-lbl">Custom Marks</label>
+          <div style="display:flex;gap:8px">
+            <input type="number" id="mark-correct" class="field-inp" placeholder="Correct" value="1" />
+            <input type="number" id="mark-wrong" class="field-inp" placeholder="Wrong" value="0" />
           </div>
         </div>
       </div>
     </div>
 
-    <div class="action-row">
-      <button class="btn btn-primary" id="process-btn" disabled
-        onclick="startProcessing()">
+    <div class="upload-action">
+      <button class="btn-extract" id="process-btn" disabled onclick="startProcessing()">
         <i class="ph ph-arrows-clockwise" aria-hidden="true"></i>
         Extract Questions
       </button>
     </div>
-  </section>
+  </div>
+</div>
 
-  <!-- ── Loading Screen ─────────────────────────────────────────── -->
-  <section id="s-loading" class="screen" aria-label="Processing" aria-live="polite">
-    <div class="loading-wrap">
-      <div class="spinner" role="status" aria-label="Loading"></div>
-      <h2 class="loading-title" id="load-msg">Extracting text from PDF…</h2>
-      <p class="loading-sub" id="load-sub">This takes a few seconds</p>
-      <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress-bar-wrap">
-        <div class="progress-fill" id="load-bar"></div>
-      </div>
+<!-- ── LOADING SCREEN ─────────────────────────────────────────────────────── -->
+<div id="s-loading" class="screen">
+  <div class="loading-center">
+    <div class="nta-spinner" role="status" aria-label="Processing"></div>
+    <div class="loading-title" id="load-msg">Extracting text from PDF…</div>
+    <div class="loading-sub" id="load-sub">This may take a few seconds</div>
+    <div class="load-track">
+      <div class="load-fill" id="load-bar"></div>
     </div>
-  </section>
+  </div>
+</div>
 
-  <!-- ── Preview Screen ─────────────────────────────────────────── -->
-  <section id="s-preview" class="screen" aria-label="Review extracted questions">
-    <div class="screen-header">
-      <div>
-        <h1 class="screen-title">Review Questions</h1>
-        <p class="screen-sub">Edit or fix questions before starting the exam</p>
-      </div>
-      <div class="header-actions">
-        <button class="btn btn-ghost" onclick="addBlankQuestion()">
-          <i class="ph ph-plus" aria-hidden="true"></i>
-          Add Question
-        </button>
-        <button class="btn btn-primary" onclick="startExam()">
-          <i class="ph ph-play" aria-hidden="true"></i>
-          Start Exam
-        </button>
-      </div>
+<!-- ── PREVIEW SCREEN ─────────────────────────────────────────────────────── -->
+<div id="s-preview" class="screen">
+  <div class="preview-header">
+    <div class="preview-title-row">
+      <div class="preview-title">Review Extracted Questions</div>
+      <div class="preview-sub">Edit or remove questions before starting the exam</div>
     </div>
-
-    <div class="stat-row" id="preview-stats"></div>
-    <div id="warnings-panel"></div>
-    <div id="preview-list"></div>
-  </section>
-
-  <!-- ── Exam Screen ────────────────────────────────────────────── -->
-  <section id="s-exam" class="screen" aria-label="Exam in progress">
-    <div class="exam-topbar">
-      <div class="timer-section">
-        <i class="ph ph-timer" aria-hidden="true"></i>
-        <span class="timer-display" id="timer-display" aria-live="polite" aria-label="Time remaining">3:00:00</span>
-      </div>
-      <div class="progress-section">
-        <span class="progress-label" id="ans-count">0</span>
-        <span class="progress-label muted"> / </span>
-        <span class="progress-label" id="total-count">0</span>
-        <span class="progress-label muted"> answered</span>
-      </div>
-    </div>
-
-    <div class="timer-track">
-      <div class="timer-fill" id="timer-bar"></div>
-    </div>
-
-    <div class="nav-dots" id="nav-dots" role="navigation" aria-label="Question navigation"></div>
-    <div id="exam-questions"></div>
-
-    <div class="exam-footer">
-      <button class="btn btn-ghost" onclick="goScreen('s-preview')">
-        <i class="ph ph-arrow-left" aria-hidden="true"></i>
-        Back to Preview
+    <div class="preview-actions">
+      <button class="btn-nta btn-ghost" onclick="addBlankQuestion()">
+        <i class="ph ph-plus" aria-hidden="true"></i> Add Question
       </button>
-      <button class="btn btn-primary" onclick="submitExam()">
-        <i class="ph ph-check-circle" aria-hidden="true"></i>
-        Submit Paper
+      <button class="btn-nta btn-green" onclick="startExam()">
+        <i class="ph ph-play" aria-hidden="true"></i> Start Exam
       </button>
     </div>
-  </section>
+  </div>
+  <div class="preview-stats" id="preview-stats"></div>
+  <div id="warn-panel"></div>
+  <div id="preview-list"></div>
+</div>
 
-  <!-- ── Result Screen ──────────────────────────────────────────── -->
-  <section id="s-result" class="screen" aria-label="Exam results">
-    <div class="screen-header">
-      <div>
-        <h1 class="screen-title">Results</h1>
-        <p class="screen-sub" id="result-subtitle"></p>
+<!-- ── EXAM SCREEN ────────────────────────────────────────────────────────── -->
+<div id="s-exam" class="screen exam-screen">
+
+  <!-- Top bar -->
+  <div class="exam-topbar">
+    <div class="exam-brand">
+      <i class="ph ph-atom" aria-hidden="true"></i>
+      <span>Amibrave</span>
+    </div>
+    <div class="exam-meta">
+      <span class="exam-meta-label">Exam Name:</span>
+      <span class="exam-meta-val">GATE Practice</span>
+    </div>
+    <div class="exam-timer-box">
+      <i class="ph ph-timer" aria-hidden="true"></i>
+      Time Left: <span id="timer-display" aria-live="polite">3:00:00</span>
+    </div>
+  </div>
+
+  <!-- Body: question panel + palette -->
+  <div class="exam-body">
+
+    <!-- Left: question panel -->
+    <div class="exam-left">
+      <div class="question-header">
+        <span class="question-label" id="q-label">Question 1:</span>
+        <div class="q-scroll-btns">
+          <button class="scroll-btn" onclick="scrollQTop()" aria-label="Scroll to top of question">
+            <i class="ph ph-arrow-circle-up" aria-hidden="true"></i>
+          </button>
+          <button class="scroll-btn" onclick="scrollQBottom()" aria-label="Scroll to bottom of question">
+            <i class="ph ph-arrow-circle-down" aria-hidden="true"></i>
+          </button>
+        </div>
       </div>
-      <div class="header-actions">
-        <button class="btn btn-ghost" onclick="downloadPDF()">
-          <i class="ph ph-download-simple" aria-hidden="true"></i>
-          Download PDF
+
+      <div class="question-body" id="question-body">
+        <!-- Question content rendered here -->
+      </div>
+
+      <!-- Action buttons -->
+      <div class="exam-actions">
+        <button class="btn-nta btn-green" onclick="saveAndNext()">
+          <i class="ph ph-floppy-disk" aria-hidden="true"></i> Save &amp; Next
         </button>
-        <button class="btn btn-primary" onclick="resetAll()">
-          <i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>
-          Start Over
+        <button class="btn-nta btn-white" onclick="clearResponse()">
+          <i class="ph ph-eraser" aria-hidden="true"></i> Clear
+        </button>
+        <button class="btn-nta btn-orange" onclick="saveAndMarkReview()">
+          <i class="ph ph-bookmark-simple" aria-hidden="true"></i> Save &amp; Mark for Review
+        </button>
+        <button class="btn-nta btn-darkblue" onclick="markReviewAndNext()">
+          <i class="ph ph-flag" aria-hidden="true"></i> Mark for Review &amp; Next
+        </button>
+      </div>
+
+      <!-- Navigation -->
+      <div class="exam-nav">
+        <button class="btn-nta btn-white" onclick="prevQuestion()">
+          <i class="ph ph-caret-left" aria-hidden="true"></i> Back
+        </button>
+        <button class="btn-nta btn-white" onclick="nextQuestion()">
+          Next <i class="ph ph-caret-right" aria-hidden="true"></i>
+        </button>
+        <button class="btn-nta btn-submit" onclick="confirmSubmit()">
+          <i class="ph ph-paper-plane-tilt" aria-hidden="true"></i> Submit
         </button>
       </div>
     </div>
 
-    <div class="stat-row" id="result-stats"></div>
-    <div class="divider"></div>
-    <h2 class="section-title">Question Review</h2>
-    <div id="result-list"></div>
-  </section>
+    <!-- Right: palette -->
+    <div class="exam-right">
+      <!-- Legend -->
+      <div class="palette-legend">
+        <div class="legend-item">
+          <span class="legend-dot dot-notvisited"></span>
+          <span class="legend-count" id="cnt-notvisited">0</span> Not Visited
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot dot-notanswered"></span>
+          <span class="legend-count" id="cnt-notanswered">0</span> Not Answered
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot dot-answered"></span>
+          <span class="legend-count" id="cnt-answered">0</span> Answered
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot dot-review"></span>
+          <span class="legend-count" id="cnt-review">0</span> Marked for Review
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot dot-answeredreview"></span>
+          <span class="legend-count" id="cnt-answeredreview">0</span> Answered &amp; Marked
+        </div>
+      </div>
 
-  <script src="script.js"></script>
+      <div class="palette-title">Question Palette</div>
+      <div class="palette-grid" id="palette-grid"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── SUBMIT CONFIRM MODAL ───────────────────────────────────────────────── -->
+<div id="modal-overlay" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div class="modal-title">
+      <i class="ph ph-warning" aria-hidden="true"></i>
+      Submit Exam?
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn-nta btn-green" onclick="submitExam()">
+        <i class="ph ph-check-circle" aria-hidden="true"></i> Yes, Submit
+      </button>
+      <button class="btn-nta btn-white" onclick="closeModal()">
+        <i class="ph ph-x" aria-hidden="true"></i> Cancel
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── RESULT SCREEN ──────────────────────────────────────────────────────── -->
+<div id="s-result" class="screen">
+  <div class="result-header">
+    <div class="result-title">
+      <i class="ph ph-chart-bar" aria-hidden="true"></i>
+      Exam Results
+    </div>
+    <div class="result-actions">
+      <button class="btn-nta btn-orange" onclick="downloadPDF()">
+        <i class="ph ph-download-simple" aria-hidden="true"></i> Download PDF
+      </button>
+      <button class="btn-nta btn-green" onclick="resetAll()">
+        <i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i> Start Over
+      </button>
+    </div>
+  </div>
+  <div class="result-sub" id="result-sub"></div>
+  <div class="result-stats" id="result-stats"></div>
+  <div class="result-divider"></div>
+  <div class="result-review-title">Question-wise Summary</div>
+  <div id="result-list"></div>
+</div>
+
+<!-- ── TOAST ──────────────────────────────────────────────────────────────── -->
+<div class="toast-container" id="toast-container"></div>
+
+<script src="script.js"></script>
 </body>
 </html>
