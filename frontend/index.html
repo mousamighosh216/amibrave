@@ -276,8 +276,11 @@
       Exam Results
     </div>
     <div class="result-actions">
-      <button class="btn-nta btn-orange" onclick="downloadJSON()">
+      <!-- <button class="btn-nta btn-orange" onclick="downloadJSON()">
         <i class="ph ph-download-simple" aria-hidden="true"></i> Download JSON
+      </button> -->
+      <button class="btn-nta btn-orange" onclick="downloadPDF()">
+        <i class="ph ph-download-simple" aria-hidden="true"></i> Download PDF
       </button>
       <button class="btn-nta btn-green" onclick="resetAll()">
         <i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i> Start Over
@@ -294,7 +297,7 @@
 <!-- ── TOAST ──────────────────────────────────────────────────────────────── -->
 <div class="toast-container" id="toast-container"></div>
 
-<script src="script.js"></script>
 <script src="storage.js"></script>
+<script src="script.js"></script>
 </body>
 </html>
