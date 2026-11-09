@@ -1,27 +1,33 @@
 """
 Amibrave — Flask Application Entry Point
-Handles routing, request validation, timeout enforcement,
-concurrent request limiting, and CORS.
+Handles routing, bounded upload validation, concurrent request limiting,
+question-image rendering, and CORS.
 """
 
 import os
+import base64
 import logging
 import threading
-from datetime import datetime
+import tempfile
+from pathlib import Path
+from datetime import datetime, timezone
 from functools import wraps
 
-from flask import Flask, request, jsonify, send_file
-import io
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 
 from errors import (
-    err_file_too_large, err_invalid_pdf, err_timeout,
-    err_too_many_requests, err_server,
-    warn_file_near_limit
+    err_file_notuploaded,
+    err_file_too_large,
+    err_invalid_pdf,
+    err_too_many_requests,
+    err_server,
+    err_image_render_failed,
+    warn_file_near_limit,
 )
 from parser import extract_questions, extract_answer_key
-from pdf_generator import generate_pdf
+from image_renderer import render_question_images, ImageRenderError
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -39,9 +45,10 @@ app = Flask(__name__)
 # CORS — whitelist your GitHub Pages domain and localhost for development
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5500,http://127.0.0.1:5500,https://yourusername.github.io"
+    "http://localhost:5500,http://127.0.0.1:5500,https://mousamighosh216.github.io"
 ).split(",")
 
+ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS if origin.strip()]
 CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=False)
 
 # ---------------------------------------------------------------------------
@@ -50,13 +57,14 @@ CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=False)
 
 MAX_FILE_SIZE_MB    = 10
 WARN_FILE_SIZE_MB   = 8
-REQUEST_TIMEOUT_SEC = 60
-MAX_CONCURRENT      = 3          # Max simultaneous PDF processing requests
+MAX_CONCURRENT      = 3          # Per Gunicorn worker process
+DEFAULT_RENDER_DPI  = 150
+app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
 
 _active_requests    = 0
 _lock               = threading.Lock()
 
-VERSION             = "1.0.0"
+VERSION             = "1.2.0"
 
 # ---------------------------------------------------------------------------
 # Decorators
@@ -80,43 +88,6 @@ def with_concurrency_limit(f):
     return decorated
 
 
-def with_timeout(f):
-    """
-    Enforce REQUEST_TIMEOUT_SEC using a background thread.
-    In TESTING mode, runs inline to avoid request context issues.
-    """
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if app.config.get("TESTING"):
-            return f(*args, **kwargs)
-
-        result: list[object | None] = [None]
-        exception: list[Exception | None] = [None]
-
-        def target():
-            try:
-                result[0] = f(*args, **kwargs)
-            except Exception as e:
-                exception[0] = e
-
-        thread = threading.Thread(target=target, daemon=True)
-        thread.start()
-        thread.join(timeout=REQUEST_TIMEOUT_SEC)
-
-        if thread.is_alive():
-            logger.warning(f"Request timeout after {REQUEST_TIMEOUT_SEC}s")
-            body, status = err_timeout()
-            return jsonify(body), status
-
-        if exception[0]:
-            logger.error(f"Unhandled exception: {exception[0]}")
-            body, status = err_server(str(exception[0]))
-            return jsonify(body), status
-
-        return result[0]
-    return decorated
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -128,7 +99,7 @@ def validate_pdf_upload(field_name: str = "file") -> tuple:
     is (dict, status) if invalid, else None.
     """
     if field_name not in request.files:
-        body, status = err_invalid_pdf()
+        body, status = err_file_notuploaded()
         return None, [], (jsonify(body), status)
 
     file = request.files[field_name]
@@ -137,7 +108,9 @@ def validate_pdf_upload(field_name: str = "file") -> tuple:
         body, status = err_invalid_pdf()
         return None, [], (jsonify(body), status)
 
-    pdf_bytes = file.read()
+    # Read at most one byte beyond the configured limit. This prevents an
+    # oversized upload from being fully copied into application memory.
+    pdf_bytes = file.stream.read(MAX_FILE_SIZE_MB * 1024 * 1024 + 1)
     size_mb   = len(pdf_bytes) / (1024 * 1024)
 
     if size_mb > MAX_FILE_SIZE_MB:
@@ -171,13 +144,12 @@ def health():
         "version"       : VERSION,
         "active_requests": _active_requests,
         "max_concurrent": MAX_CONCURRENT,
-        "timestamp"     : datetime.utcnow().isoformat()
+        "timestamp"     : datetime.now(timezone.utc).isoformat()
     }), 200
 
 
 @app.route("/extract", methods=["POST"])
 @with_concurrency_limit
-# @with_timeout 
 def extract():
     """
     POST /extract
@@ -199,9 +171,73 @@ def extract():
     return jsonify(response_body), status
 
 
+@app.route("/api/exams/process", methods=["POST"])
+@with_concurrency_limit
+def process_exam():
+    """Extract questions and return their page-region images in one response.
+
+    Image bytes are transported as base64 for this request only. The frontend
+    should decode them to Blob objects and persist those Blobs in IndexedDB.
+    No exam files or images are retained on the server after the request.
+    """
+    pdf_bytes, upload_warnings, error = validate_pdf_upload("file")
+    if error:
+        return error
+
+    response_body, status = extract_questions(pdf_bytes)
+    if status != 200 or not response_body.get("success"):
+        return jsonify(response_body), status
+
+    question_regions = response_body.get("question_regions", [])
+    if not question_regions:
+        body, error_status = err_image_render_failed()
+        return jsonify(body), error_status
+
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            pdf_path = temp_path / "source.pdf"
+            image_dir = temp_path / "question-images"
+            pdf_path.write_bytes(pdf_bytes)
+
+            rendered = render_question_images(
+                    pdf_path=pdf_path,
+                    question_regions=question_regions,
+                    output_dir=image_dir,
+                    dpi=DEFAULT_RENDER_DPI,
+            )
+
+            images = []
+            for item in rendered:
+                image_bytes = Path(item["path"]).read_bytes()
+                images.append({
+                        "question_number": item["question_number"],
+                        "part": item["part"],
+                        "page_number": item["page_number"],
+                        "width": item["width"],
+                        "height": item["height"],
+                        "format": item["format"],
+                        "mime_type": item["mime_type"],
+                        "data": base64.b64encode(image_bytes).decode("ascii"),
+                })
+
+        response_body["images"] = images
+        response_body["meta"]["rendered_image_count"] = len(images)
+        response_body["meta"]["render_dpi"] = DEFAULT_RENDER_DPI
+        if upload_warnings:
+            response_body.setdefault("warnings", [])
+            response_body["warnings"] = upload_warnings + response_body["warnings"]
+
+        return jsonify(response_body), 200
+
+    except (ImageRenderError, OSError) as error:
+        logger.exception("Question image rendering failed: %s", error)
+        body, error_status = err_image_render_failed()
+        return jsonify(body), error_status
+
+
 @app.route("/extract-key", methods=["POST"])
 @with_concurrency_limit
-# @with_timeout
 def extract_key():
     """
     POST /extract-key
@@ -227,44 +263,44 @@ def extract_key():
 # PDF generation endpoint
 # ---------------------------------------------------------------------------
 
-@app.route("/generate-pdf", methods=["POST"])
-@with_concurrency_limit
-# @with_timeout
-def generate_pdf_route():
-    """
-    POST /generate-pdf
-    Body: JSON payload with questions, answers, marked, statuses,
-          marking, customMarks, timeTaken
-    Returns: PDF file download
-    """
-    if not request.is_json:
-        body, status = err_server("Request must be JSON with Content-Type: application/json")
-        return jsonify(body), status
+# @app.route("/generate-exam-json", methods=["POST"])
+# @with_concurrency_limit
+# # @with_timeout
+# def generate_pdf_route():
+#     """
+#     POST /generate-pdf
+#     Body: JSON payload with questions, answers, marked, statuses,
+#           marking, customMarks, timeTaken
+#     Returns: PDF file download
+#     """
+#     if not request.is_json:
+#         body, status = err_server("Request must be JSON with Content-Type: application/json")
+#         return jsonify(body), status
 
-    payload = request.get_json(silent=True)
-    if not payload:
-        body, status = err_server("Empty or invalid JSON payload")
-        return jsonify(body), status
+#     payload = request.get_json(silent=True)
+#     if not payload:
+#         body, status = err_server("Empty or invalid JSON payload")
+#         return jsonify(body), status
 
-    questions = payload.get("questions", [])
-    if not questions:
-        body, status = err_server("No questions in payload")
-        return jsonify(body), status
+#     questions = payload.get("questions", [])
+#     if not questions:
+#         body, status = err_server("No questions in payload")
+#         return jsonify(body), status
 
-    logger.info(f"Generating PDF: {len(questions)} questions")
+#     logger.info(f"Generating PDF: {len(questions)} questions")
 
-    pdf_bytes, error = generate_pdf(payload)
+#     pdf_bytes, error = generate_pdf(payload)
 
-    if (error or pdf_bytes is None):
-        body, status = err_server(f"PDF generation failed: {error}")
-        return jsonify(body), status
+#     if (error or pdf_bytes is None):
+#         body, status = err_server(f"PDF generation failed: {error}")
+#         return jsonify(body), status
 
-    return send_file(
-        io.BytesIO(pdf_bytes),
-        mimetype        = "application/pdf",
-        as_attachment   = True,
-        download_name   = f"amibrave_results_{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    )
+#     return send_file(
+#         io.BytesIO(pdf_bytes),
+#         mimetype        = "application/pdf",
+#         as_attachment   = True,
+#         download_name   = f"amibrave_results_{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+#     )
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +314,7 @@ def not_found(e):
         "error"  : {
             "code"   : "ERR_404",
             "message": "Endpoint not found.",
-            "detail" : f"No route matches the requested URL. Available: GET /health, POST /extract, POST /extract-key"
+            "detail" : "Available endpoints: GET /health, POST /extract, POST /api/exams/process, POST /extract-key."
         }
     }), 404
 

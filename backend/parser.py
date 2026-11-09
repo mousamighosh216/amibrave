@@ -1,782 +1,542 @@
-"""
-Amibrave — Adaptive Coordinate-Based PDF Parser
-Uses pdfplumber extract_words() with full dynamic layout detection:
-  - Column boundaries from gap analysis
-  - Line grouping from median word height
-  - Question markers from incremental token patterns
-  - Option patterns from consistent repeating tokens
-  - 70% detection rate from marker rhythm
-  - Fallback: OCR (pytesseract) → Gemini Vision
+"""Text-based GATE PDF question extraction for Amibrave.
+
+The parser deliberately does not use OCR or AI. It extracts the PDF text layer,
+keeps page coordinates, and groups page fragments into logical questions.
 """
 
-import re
 import io
-import random
 import logging
+import re
 import statistics
 from typing import Optional
 
 import pdfplumber
-import fitz
-from PIL import Image
-import pytesseract
 
 from errors import (
-    err_invalid_pdf, err_password_protected, err_no_pages,
-    err_unreadable_file, err_blank_pdf,
-    warn_pages_skipped, warn_low_confidence, warn_answer_key_partial
+    err_invalid_pdf,
+    err_password_protected,
+    err_no_pages,
+    err_blank_pdf,
+    warn_answer_key_partial,
 )
-from gemini import extract_page_with_gemini, init_gemini
 
 logger = logging.getLogger(__name__)
 
-THRESHOLD_RATIO     = 0.30
-DETECTION_THRESHOLD = 0.70
-RANDOM_SAMPLE_COUNT = 6
+# ---------------------------------------------------------------------------
+# Text and coordinate helpers
+# ---------------------------------------------------------------------------
 
-
-# ── Coordinate utilities ─────────────────────────────────────────────────────
 
 def dynamic_line_tolerance(words: list[dict]) -> float:
-    """
-    Derive line-grouping tolerance from median word height on this page.
-    Avoids hardcoding px values that break across font sizes.
-    """
-    if not words:
-        return 5.0
-    logger.info(f"First word sample: {words[:3]}")
-    heights = [w["bottom"] - w["top"] for w in words if w.get("bottom",0) > w.get("top",0)]
-    if not heights:
-        return 5.0
-    return statistics.median(heights) * 0.5
+    """Derive line grouping tolerance from the median word height."""
+    heights = [
+        word["bottom"] - word["top"]
+        for word in words
+        if word.get("bottom", 0) > word.get("top", 0)
+    ]
+    return statistics.median(heights) * 0.5 if heights else 5.0
 
 
 def detect_columns(words: list[dict], page_width: float) -> list[float]:
+    """Detect persistent vertical gutters between text columns.
+
+    The union of word bounding boxes across the whole page is used so that
+    ordinary spaces between words do not masquerade as column boundaries.
     """
-    Detect column boundaries dynamically using x0 gap analysis.
-    Returns sorted list of x0 boundary values that separate columns.
-    No fixed percentages — boundaries emerge from the data.
-    """
-    if not words:
+    if len(words) < 8:
         return []
 
-    # Collect all x0 positions rounded to nearest integer
-    x0_values = sorted(set(round(w["x0"]) for w in words))
-    if len(x0_values) < 2:
-        return []
+    intervals = sorted((float(word["x0"]), float(word["x1"])) for word in words)
+    merged: list[list[float]] = []
+    for x0, x1 in intervals:
+        if not merged or x0 > merged[-1][1] + 1.0:
+            merged.append([x0, x1])
+        else:
+            merged[-1][1] = max(merged[-1][1], x1)
 
-    # Compute gaps between consecutive x0 positions
-    gaps = [
-        (x0_values[i + 1] - x0_values[i], x0_values[i + 1])
-        for i in range(len(x0_values) - 1)
-    ]
-    if not gaps:
-        return []
-
-    gap_sizes   = [g[0] for g in gaps]
-    median_gap  = statistics.median(gap_sizes)
-
-    # A gap 3x larger than median signals a column boundary
-    boundaries = [
-        x_pos for gap_size, x_pos in gaps
-        if gap_size > median_gap * 3
-    ]
-
-    # Filter boundaries too close to page edges (noise)
     edge_margin = page_width * 0.05
-    boundaries  = [b for b in boundaries if edge_margin < b < page_width - edge_margin]
-
-    return sorted(boundaries)
+    minimum_gutter = max(24.0, page_width * 0.035)
+    boundaries = []
+    for left, right in zip(merged, merged[1:]):
+        gap = right[0] - left[1]
+        midpoint = (right[0] + left[1]) / 2
+        if gap >= minimum_gutter and edge_margin < midpoint < page_width - edge_margin:
+            boundaries.append(midpoint)
+    return boundaries
 
 
 def assign_column(x0: float, boundaries: list[float]) -> int:
-    """Return 0-indexed column number for a given x0 position."""
-    for i, boundary in enumerate(boundaries):
+    for index, boundary in enumerate(boundaries):
         if x0 < boundary:
-            return i
+            return index
     return len(boundaries)
 
 
 def group_words_into_lines(words: list[dict], tolerance: float) -> list[dict]:
-    """
-    Group words into lines using dynamic y0 proximity tolerance.
-    Each line: { y0, column, words: [...], text: str }
-    """
-    if not words:
-        return []
+    """Group extracted words into lines while retaining their coordinates."""
+    lines: list[dict] = []
+    for word in sorted(words, key=lambda item: (item.get("top", 0), item.get("x0", 0))):
+        y = word.get("top", word.get("y0", 0))
+        column = word.get("column", 0)
+        target = next(
+            (
+                line for line in lines
+                if line["column"] == column and abs(line["y0"] - y) <= tolerance
+            ),
+            None,
+        )
+        if target is None:
+            target = {"y0": y, "column": column, "words": []}
+            lines.append(target)
+        target["words"].append(word)
 
-    lines = []
-    for word in words:
-        placed = False
-        for line in lines:
-            if (line["column"] == word.get("column", 0) and
-                    abs(word.get("top", word.get("y0",0)) - line["y0"]) <= tolerance):
-                line["words"].append(word)
-                placed = True
-                break
-        if not placed:
-            lines.append({
-                "y0"    : word.get("top", word.get("y0",0)),
-                "column": word.get("column", 0),
-                "words" : [word],
-            })
-
-    # Sort words within each line left to right
     for line in lines:
-        line["words"].sort(key=lambda w: w["x0"])
-        line["text"] = " ".join(w["text"] for w in line["words"])
+        line["words"].sort(key=lambda item: item.get("x0", 0))
+        line["text"] = " ".join(word["text"] for word in line["words"]).strip()
+        line["bbox"] = [
+            min(word["x0"] for word in line["words"]),
+            min(word.get("top", word.get("y0", 0)) for word in line["words"]),
+            max(word["x1"] for word in line["words"]),
+            max(word.get("bottom", word.get("y1", 0)) for word in line["words"]),
+        ]
 
-    # Sort lines top to bottom, then left column before right column
-    lines.sort(key=lambda l: (round(l["y0"] / 10), l["column"]))
+    # Preserve column reading order, then vertical order within each column.
+    lines.sort(key=lambda line: (line["column"], line["y0"]))
     return lines
 
 
-# ── Question marker detection ─────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Question and option markers
+# ---------------------------------------------------------------------------
 
-# All known GATE question numbering formats
-Q_MARKER_PATTERNS = [
-    r"^Q\.?\s*(\d+)\s*[\.\):]?\s*$",   # Q.56  Q56  Q.56.
-    r"^(\d+)\s*\.\s*$",                  # 56.
-    r"^(\d+)\s*\)\s*$",                  # 56)
-    r"^Q\.?\s*(\d+)\s*[\.\):]",          # Q.56 followed by text
-    r"^(\d+)\s*[\.\)]\s+\S",             # 56. text  or  56) text
-]
+
+# A range such as "Q.1 - Q.5 Carry ONE mark Each" is a section heading,
+# not the beginning of question 1. Keep this generic: papers use different
+# punctuation, spacing, and wording for section headings.
+QUESTION_RANGE_HEADING = re.compile(
+    r"^\s*(?:Q\s*\.?\s*)?\d{1,3}\s*"
+    r"(?:[-–—]|\bto\b)\s*"
+    r"(?:Q\s*\.?\s*)?\d{1,3}\b",
+    re.IGNORECASE,
+)
+QUESTION_MARKER_PATTERNS = re.compile(
+    r"^\s*Q\s*\.?\s*(\d{1,3})\b",
+    re.IGNORECASE,
+)
+
+
+def _is_section_heading_line(text: str) -> bool:
+    """Return True for question-number ranges used as section headings."""
+    return QUESTION_RANGE_HEADING.match(text.strip()) is not None
+
 
 def detect_question_marker(text: str) -> Optional[int]:
-    """Return question number if line is a question marker, else None."""
-    t = text.strip()
-    # Extended patterns including inline (Q.1 text on same line)
-    all_patterns = Q_MARKER_PATTERNS + [
-        r"^Q\.?\s*(\d+)[\s\.\):]",   # Q.1 text, Q1 text, Q.1. text
-        r"^Q\s+(\d+)[\s\.\):]",        # Q 1 text
-    ]
-    for pat in all_patterns:
-        m = re.match(pat, t, re.IGNORECASE)
-        if m:
-            try:
-                return int(m.group(1))
-            except (IndexError, ValueError):
-                pass
+    candidate = text.strip()
+    if _is_section_heading_line(candidate):
+        return None
+
+    match = QUESTION_MARKER_PATTERNS.match(candidate)
+    if match:
+        try:
+            return int(match.group(1))
+        except (IndexError, ValueError):
+            return None
     return None
 
 
-def detect_marker_pattern_statistically(lines: list[dict]) -> list[int]:
+def _normalise_page_furniture(text: str) -> str:
+    """Create a comparison key without paper-specific metadata assumptions."""
+    value = text.casefold()
+    value = re.sub(r"\d+", "#", value)
+    value = re.sub(r"[^\w#]+", " ", value, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _detect_repeated_page_furniture(
+    page_lines: list[list[dict]],
+    page_sizes: list[tuple[float, float]],
+) -> list[set[int]]:
+    """Find recurring text in page-edge bands using repetition and coordinates.
+
+    No institution, exam title, or page-number wording is hardcoded. A line is
+    considered page furniture only when its normalised text recurs on several
+    pages and it consistently appears near the top or bottom edge.
     """
-    Scan all lines for incrementing numeric tokens.
-    Confirms a pattern only if 3+ consecutive increments found.
-    Returns list of line indices that are question markers.
-    """
-    candidates = {}  # line_index → question_number
-    for i, line in enumerate(lines):
-        num = detect_question_marker(line["text"])
-        if num is not None:
-            candidates[i] = num
+    occurrences: dict[str, set[int]] = {}
+    edge_positions: dict[tuple[int, str], bool] = {}
 
-    if len(candidates) < 2:
-        return list(candidates.keys())
+    for page_index, lines in enumerate(page_lines):
+        page_width, page_height = page_sizes[page_index]
+        for line in lines:
+            text = line.get("text", "").strip()
+            if not text or _is_section_heading_line(text):
+                continue
 
-    # Find runs of incrementing numbers
-    indices = sorted(candidates.keys())
-    confirmed = set()
-    run = [indices[0]]
+            y0, y1 = line["bbox"][1], line["bbox"][3]
+            near_edge = y0 <= page_height * 0.12 or y1 >= page_height * 0.90
+            if not near_edge:
+                continue
 
-    for i in range(1, len(indices)):
-        prev_idx = indices[i - 1]
-        curr_idx = indices[i]
-        prev_num = candidates[prev_idx]
-        curr_num = candidates[curr_idx]
-        if curr_num == prev_num + 1 or curr_num == prev_num + 2:
-            run.append(curr_idx)
-        else:
-            if len(run) >= 3:
-                confirmed.update(run)
-            run = [curr_idx]
+            signature = _normalise_page_furniture(text)
+            if len(signature) < 5:
+                continue
 
-    if len(run) >= 3:
-        confirmed.update(run)
+            occurrences.setdefault(signature, set()).add(page_index)
+            edge_positions[(page_index, signature)] = True
 
-    # Fall back to all candidates if no confirmed run found
-    return sorted(confirmed) if confirmed else list(candidates.keys())
+    page_count = len(page_lines)
+    repeat_threshold = max(2, min(5, int(page_count * 0.10 + 0.999)))
+    repeated_signatures = {
+        signature
+        for signature, pages in occurrences.items()
+        if len(pages) >= repeat_threshold
+    }
+
+    return [
+        {
+            index
+            for index, line in enumerate(lines)
+            if _normalise_page_furniture(line.get("text", "")) in repeated_signatures
+            and (page_index, _normalise_page_furniture(line.get("text", ""))) in edge_positions
+        }
+        for page_index, lines in enumerate(page_lines)
+    ]
 
 
-# ── Option pattern detection ──────────────────────────────────────────────────
+OPTION_PATTERNS = (
+    (r"^\(([1-4])\)\s*", "numeric_paren"),
+    (r"^\(([A-D])\)\s*", "alpha_paren"),
+    (r"^([A-D])\.\s+", "alpha_dot"),
+    (r"^([A-D])\)\s+", "alpha_bracket"),
+    (r"^([1-4])\.\s+", "numeric_dot"),
+    (r"^([1-4])\)\s+", "numeric_bracket"),
+)
 
-OPTION_PATTERNS = [
-    (r"^\(([1-4])\)\s*",        "numeric_paren"),   # (1) (2) (3) (4)
-    (r"^\(([A-Da-d])\)\s*",     "alpha_paren"),     # (A) (B) (C) (D)
-    (r"^([A-Da-d])\.\s+",       "alpha_dot"),       # A. B. C. D.
-    (r"^([A-Da-d])\)\s+",       "alpha_bracket"),   # A) B) C) D)
-    (r"^([1-4])\.\s+",          "numeric_dot"),     # 1. 2. 3. 4.
-    (r"^([1-4])\)\s+",          "numeric_bracket"), # 1) 2) 3) 4)
-]
 
 def detect_option_marker(text: str) -> Optional[tuple[str, str, str]]:
-    """
-    Returns (label, remaining_text, pattern_type) if line is an option, else None.
-    """
-    t = text.strip()
-    for pat, ptype in OPTION_PATTERNS:
-        m = re.match(pat, t, re.IGNORECASE)
-        if m:
-            label     = m.group(1).upper()
-            remaining = t[m.end():].strip()
-            return label, remaining, ptype
+    candidate = text.strip()
+    for pattern, pattern_type in OPTION_PATTERNS:
+        match = re.match(pattern, candidate, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).upper(), candidate[match.end():].strip(), pattern_type
     return None
 
 
-def detect_dominant_option_pattern(lines: list[dict]) -> Optional[str]:
-    """
-    Find which option pattern appears most in a question block.
-    Returns the dominant pattern_type or None.
-    """
-    counts = {}
-    for line in lines:
-        result = detect_option_marker(line["text"])
-        if result:
-            _, _, ptype = result
-            counts[ptype] = counts.get(ptype, 0) + 1
-    if not counts:
-        return None
-    # Use a lambda to avoid type-checker issues with dict.get overloads
-    return max(counts, key=lambda k: counts[k])
+def _is_question_marker_line(text: str) -> bool:
+    """Recognize question starts; numeric option runs are filtered separately."""
+    candidate = text.strip()
+    # Parenthesized 1-4 labels are a common option format, not question numbers.
+    if re.match(r"^\([1-4]\)\s*", candidate):
+        return False
+    return detect_question_marker(candidate) is not None
 
 
-# ── Core page parser ──────────────────────────────────────────────────────────
+def _filter_numeric_option_runs(lines: list[dict], marker_indexes: list[int]) -> list[int]:
+    """Remove compact 1,2,3,4 numeric-option sequences from marker candidates.
 
-def parse_page_with_coordinates(page) -> tuple[list[dict], list[str], float]:
+    Numeric question numbers 1-4 are ambiguous with numeric options. A compact
+    ascending run on adjacent lines is treated as an option list; question
+    starts are normally separated by the body of the preceding question.
     """
-    Full coordinate-based parsing of one pdfplumber page.
-    Returns (questions, warnings, detection_rate).
-    """
-    warnings = []
+    remove: set[int] = set()
+    position = 0
+    while position < len(marker_indexes):
+        run = [marker_indexes[position]]
+        previous_number = detect_question_marker(lines[run[0]]["text"])
+        cursor = position + 1
+        while cursor < len(marker_indexes):
+            current_index = marker_indexes[cursor]
+            current_number = detect_question_marker(lines[current_index]["text"])
+            previous_text = lines[run[-1]]["text"].strip()
+            current_text = lines[current_index]["text"].strip()
+            numeric_labels_only = (
+                re.match(r"^[1-4]\s*[.)]", previous_text) is not None
+                and re.match(r"^[1-4]\s*[.)]", current_text) is not None
+            )
+            if (
+                numeric_labels_only
+                and previous_number in (1, 2, 3)
+                and current_number is not None
+                and current_number == previous_number + 1
+                and current_number <= 4
+                and current_index - run[-1] <= 2
+            ):
+                run.append(current_index)
+                previous_number = current_number
+                cursor += 1
+            else:
+                break
+        if len(run) >= 2:
+            remove.update(run)
+        position = max(cursor, position + 1)
+    return [index for index in marker_indexes if index not in remove]
 
-    words = page.extract_words(
-        x_tolerance    = 3,
-        y_tolerance    = 3,
-        keep_blank_chars= False,
-        use_text_flow  = False,
+
+def _line_remainder(text: str, question_number: int) -> str:
+    patterns = (
+        rf"^Q\.?\s*{question_number}\s*[.):]?\s*",
+        rf"^Question\s+{question_number}\s*[.):]?\s*",
+        rf"^{question_number}\s*[.)]\s*",
     )
+    remainder = text.strip()
+    for pattern in patterns:
+        updated = re.sub(pattern, "", remainder, count=1, flags=re.IGNORECASE)
+        if updated != remainder:
+            return updated.strip()
+    return remainder
 
-    if not words:
-        return [], ["Page returned no words"], 0.0
 
-    # ── Dynamic tolerance ────────────────────────────────────────────────────
-    tolerance = dynamic_line_tolerance(words)
-
-    # ── Dynamic column detection ─────────────────────────────────────────────
-    boundaries = detect_columns(words, page.width)
-
-    # Assign column to each word
-    for word in words:
-        if "y0" not in word:
-            word["y0"] = word.get("top", 0)
-        if "y1" not in word:
-            word["y1"] = word.get("bottom", 0)
-        word["column"] = assign_column(word["x0"], boundaries)
-
-    # ── Group into lines ─────────────────────────────────────────────────────
-    lines = group_words_into_lines(words, tolerance)
-
-    if not lines:
-        return [], ["No lines reconstructed from words"], 0.0
-
-    # ── Detect question markers statistically ────────────────────────────────
-    marker_line_indices = detect_marker_pattern_statistically(lines)
-
-    if not marker_line_indices:
-        warnings.append("No question markers detected on this page")
-        return [], warnings, 0.0
-
-    # ── Estimate expected questions from marker rhythm ───────────────────────
-    if len(marker_line_indices) >= 2:
-        marker_y   = [lines[i]["y0"] for i in marker_line_indices]
-        diffs      = [marker_y[j+1] - marker_y[j] for j in range(len(marker_y)-1)]
-        avg_gap    = statistics.median(diffs) if diffs else page.height
-        expected   = max(1, round(page.height / avg_gap))
+def _merge_line_into_question(question: dict, line: dict, page_index: int) -> None:
+    question["lines"].append(line)
+    page_region = question["regions_by_page"].get(page_index)
+    x0, y0, x1, y1 = line["bbox"]
+    if page_region is None:
+        question["regions_by_page"][page_index] = [x0, y0, x1, y1]
     else:
-        expected = 1
-
-    # ── Split lines into question blocks ─────────────────────────────────────
-    questions = []
-    for idx, marker_idx in enumerate(marker_line_indices):
-        q_num_match = detect_question_marker(lines[marker_idx]["text"])
-        if q_num_match is None:
-            continue
-
-        # Collect lines belonging to this question
-        block_start = marker_idx + 1
-        block_end   = marker_line_indices[idx + 1] if idx + 1 < len(marker_line_indices) else len(lines)
-        block_lines = lines[block_start:block_end]
-
-        # First line may have question text after the marker
-        first_line_text = re.sub(
-            r"^Q?\.?\s*\d+\s*[\.\):]?\s*", "",
-            lines[marker_idx]["text"], flags=re.IGNORECASE
-        ).strip()
-
-        q, w = build_question_from_block(
-            q_num_match,
-            first_line_text,
-            block_lines,
-            page.page_number
-        )
-        warnings.extend(w)
-        if q:
-            questions.append(q)
-
-    detected      = len(questions)
-    detection_rate = detected / expected if expected > 0 else 0.0
-
-    if detection_rate < DETECTION_THRESHOLD and detected > 0:
-        warnings.append(
-            f"Page {page.page_number}: Detection rate {detection_rate:.0%} "
-            f"({detected}/{expected}) — low confidence"
-        )
-
-    return questions, warnings, detection_rate
+        page_region[0] = min(page_region[0], x0)
+        page_region[1] = min(page_region[1], y0)
+        page_region[2] = max(page_region[2], x1)
+        page_region[3] = max(page_region[3], y1)
 
 
-def build_question_from_block(
-    num: int,
-    first_line: str,
-    block_lines: list[dict],
-    page_num: int
-) -> tuple[Optional[dict], list[str]]:
-    """
-    Given a question number and its block of lines,
-    separate question text from options dynamically.
-    """
-    warnings    = []
-    q_text_parts= [first_line] if first_line else []
-    options     = []
-    current_opt = None
+def _finalize_question(question: dict) -> dict:
+    lines = question["lines"]
+    option_pattern_counts: dict[str, int] = {}
+    for line in lines:
+        marker = detect_option_marker(line["text"])
+        if marker:
+            option_pattern_counts[marker[2]] = option_pattern_counts.get(marker[2], 0) + 1
 
-    # Find dominant option pattern in this block
-    dominant_pattern = detect_dominant_option_pattern(block_lines)
+    dominant_pattern = max(option_pattern_counts, key=lambda pattern: option_pattern_counts[pattern]) if option_pattern_counts else None
+    text_parts: list[str] = []
+    options: list[dict] = []
+    current_option: Optional[dict] = None
 
-    for line in block_lines:
-        opt_result = detect_option_marker(line["text"]) if dominant_pattern else None
+    for line in lines:
+        marker = detect_option_marker(line["text"]) if dominant_pattern else None
+        if marker and marker[2] == dominant_pattern:
+            if current_option:
+                options.append(current_option)
+            current_option = {"label": marker[0], "text": marker[1]}
+        elif current_option is not None:
+            current_option["text"] = f"{current_option['text']} {line['text']}".strip()
+        elif line["text"]:
+            text_parts.append(line["text"])
 
-        if opt_result and opt_result[2] == dominant_pattern:
-            # Save previous option
-            if current_opt:
-                options.append(current_opt)
-            label, text, _ = opt_result
-            current_opt = {"label": label, "text": text}
-        elif current_opt:
-            # Continuation of current option text
-            current_opt["text"] += " " + line["text"]
-        else:
-            # Still in question text body
-            q_text_parts.append(line["text"])
+    if current_option:
+        options.append(current_option)
 
-    # Save last option
-    if current_opt:
-        options.append(current_opt)
-
-    q_text = " ".join(q_text_parts).strip()
-    q_text = re.sub(r"\s{2,}", " ", q_text)  # collapse extra spaces
-
-    if not q_text or len(q_text) < 5:
-        warnings.append(f"Q{num} page {page_num}: text too short, skipped")
-        return None, warnings
-
-    q_type = "mcq" if len(options) >= 2 else "nat"
+    question_text = re.sub(r"\s+", " ", " ".join(text_parts)).strip()
+    page_indexes = sorted(question["regions_by_page"])
+    regions = [
+        {"page_index": page_index, "bbox": question["regions_by_page"][page_index]}
+        for page_index in page_indexes
+    ]
 
     return {
-        "num"    : num,
-        "text"   : q_text[:800],
-        "type"   : q_type,
+        "num": question["num"],
+        "text": question_text,
+        "type": "mcq" if len(options) >= 2 else "nat",
         "options": options,
-        "source" : "pdfplumber",
-    }, warnings
+        "source": "pdfplumber",
+        "source_pages": [page_index + 1 for page_index in page_indexes],
+        "question_regions": regions,
+    }
 
 
-# ── Page image for OCR / Gemini ───────────────────────────────────────────────
+def _extract_page_lines(page) -> list[dict]:
+    words = page.extract_words(
+        x_tolerance=3,
+        y_tolerance=3,
+        keep_blank_chars=False,
+        use_text_flow=False,
+    )
+    if not words:
+        return []
 
-def page_to_image(pdf_bytes: bytes, page_index: int, dpi: int = 200) -> Image.Image:
-    """Render a PDF page to PIL Image using PyMuPDF at given DPI."""
-    doc  = fitz.open(stream=pdf_bytes, filetype="pdf")
-    page = doc[page_index]
-    mat  = fitz.Matrix(dpi / 72, dpi / 72)
-    pix  = page.get_pixmap(matrix=mat)
-    img  = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-    doc.close()
-    return img
-
-
-# ── OCR fallback ──────────────────────────────────────────────────────────────
-
-def ocr_page(image: Image.Image) -> str:
-    """Run pytesseract OCR on a page image, return extracted text."""
-    try:
-        config = "--oem 3 --psm 6"
-        return pytesseract.image_to_string(image, config=config)
-    except Exception as e:
-        logger.warning(f"OCR failed: {e}")
-        return ""
+    boundaries = detect_columns(words, page.width)
+    for word in words:
+        word["column"] = assign_column(word["x0"], boundaries)
+    return group_words_into_lines(words, dynamic_line_tolerance(words))
 
 
-def parse_ocr_text(text: str, page_num: int) -> tuple[list[dict], list[str]]:
-    """
-    Parse OCR text output using the same coordinate-free regex approach.
-    OCR gives cleaner joined text than raw pdfplumber, so regex works better here.
-    """
-    warnings  = []
-    questions = []
-    lines     = [l.strip() for l in text.splitlines() if l.strip()]
+# ---------------------------------------------------------------------------
+# Main text-only extraction pipeline
+# ---------------------------------------------------------------------------
 
-    # Reconstruct question blocks
-    blocks      = {}
-    current_num = None
-    current_buf = []
-
-    for line in lines:
-        num = detect_question_marker(line)
-        if num is not None:
-            if current_num is not None:
-                blocks[current_num] = current_buf
-            current_num = num
-            # Strip marker from line
-            remainder = re.sub(r"^Q?\.?\s*\d+\s*[\.\):]?\s*", "", line, flags=re.IGNORECASE).strip()
-            current_buf = [remainder] if remainder else []
-        elif current_num is not None:
-            current_buf.append(line)
-
-    if current_num is not None:
-        blocks[current_num] = current_buf
-
-    for num, buf_lines in blocks.items():
-        fake_lines = [{"text": l, "y0": i * 20, "column": 0} for i, l in enumerate(buf_lines)]
-        q, w = build_question_from_block(num, "", fake_lines, page_num)
-        warnings.extend(w)
-        if q:
-            q["source"] = "ocr"
-            questions.append(q)
-
-    return questions, warnings
-
-
-# ── Main extraction pipeline ──────────────────────────────────────────────────
 
 def extract_questions(pdf_bytes: bytes) -> tuple[dict, int]:
+    """Extract logical questions and their page crop coordinates.
+
+    A question can own multiple ordered page regions. Text before the first
+    question marker on a later page is treated as continuation of the previous
+    question. Section-range headings are ignored, and recurring page-edge text
+    is detected dynamically from the PDF rather than by paper-specific names.
     """
-    Full adaptive extraction pipeline:
-      Phase 1 → coordinate parse page 1
-      Phase 2 → if page 1 fails, random sample
-      Phase 3 → resume sequential from first hit
-      Per page → coordinate parse → OCR fallback → Gemini fallback
-      Post     → 70% check, dedup, sort
-    """
-    # ── Validate ─────────────────────────────────────────────────────────────
     try:
         pdf = pdfplumber.open(io.BytesIO(pdf_bytes))
-    except Exception as e:
-        if "password" in str(e).lower() or "encrypt" in str(e).lower():
+    except Exception as error:
+        message = str(error).lower()
+        if "password" in message or "encrypt" in message:
             return err_password_protected()
         return err_invalid_pdf()
 
-    total_pages = len(pdf.pages)
-    if total_pages == 0:
-        pdf.close()
-        return err_no_pages()
+    try:
+        total_pages = len(pdf.pages)
+        if total_pages == 0:
+            return err_no_pages()
 
-    logger.info(f"Starting extraction: {total_pages} pages")
+        extracted: list[dict] = []
+        active_question: Optional[dict] = None
+        warnings: list[str] = []
 
-    gemini_model  = None
-    all_questions = []
-    all_warnings  = []
-    skipped_pages = []
-    low_conf_pages= []
+        # Analyse all pages first so recurring headers/footers can be identified
+        # from this PDF itself, rather than from institution-specific keywords.
+        page_lines = [_extract_page_lines(page) for page in pdf.pages]
+        page_sizes = [(page.width, page.height) for page in pdf.pages]
+        page_furniture = _detect_repeated_page_furniture(page_lines, page_sizes)
 
-    # ── Phase 1: try page 1 ───────────────────────────────────────────────────
-    qs, ws, rate = parse_page_with_coordinates(pdf.pages[0])
-    page1_success = rate >= DETECTION_THRESHOLD or len(qs) > 0
+        for page_index, original_lines in enumerate(page_lines):
+            if not original_lines:
+                warnings.append(f"Page {page_index + 1} has no extractable text.")
+                continue
 
-    if page1_success:
-        logger.info(f"Page 1 success (rate={rate:.0%}) — sequential mode")
-        all_questions.extend(qs)
-        all_warnings.extend(ws)
-        start_from = 1  # continue from page 2
-        qs2, ws2, skipped, low_conf, gemini_model = sequential_extract(
-            pdf, pdf_bytes, range(start_from, total_pages), gemini_model
-        )
-        all_questions.extend(qs2)
-        all_warnings.extend(ws2)
-        skipped_pages.extend(skipped)
-        low_conf_pages.extend(low_conf)
+            ignored_indexes = page_furniture[page_index]
+            lines = [
+                line for index, line in enumerate(original_lines)
+                if index not in ignored_indexes and not _is_section_heading_line(line["text"])
+            ]
+            if not lines:
+                warnings.append(f"Page {page_index + 1} contains only page furniture or section headings.")
+                continue
 
-    else:
-        # ── Phase 2: random sampling ──────────────────────────────────────────
-        logger.info("Page 1 failed — random sampling")
-        skip_first   = min(2, total_pages - 1)
-        sample_pool  = list(range(skip_first, total_pages))
-        sample_size  = min(RANDOM_SAMPLE_COUNT, len(sample_pool))
-        sample_pages = sorted(random.sample(sample_pool, sample_size))
+            marker_indexes = [
+                index for index, line in enumerate(lines)
+                if _is_question_marker_line(line["text"])
+            ]
+            marker_indexes = _filter_numeric_option_runs(lines, marker_indexes)
 
-        first_hit = None
-        for page_idx in sample_pages:
-            qs, ws, rate = parse_page_with_coordinates(pdf.pages[page_idx])
-            if rate >= DETECTION_THRESHOLD or len(qs) > 0:
-                first_hit = page_idx
-                all_questions.extend(qs)
-                all_warnings.extend(ws)
-                logger.info(f"Random hit on page {page_idx + 1} (rate={rate:.0%})")
-                break
-
-        if first_hit is None:
-            # ── Phase 3: 30% threshold check ─────────────────────────────────
-            checked = skip_first + sample_size
-            if checked / total_pages >= THRESHOLD_RATIO:
-                pdf.close()
-                return err_unreadable_file(checked, total_pages)
-
-            # Try Gemini on sampled pages
-            logger.info("Random sampling failed — trying Gemini on samples")
-            try:
-                gemini_model = init_gemini()
-            except Exception as e:
-                pdf.close()
-                return err_unreadable_file(skip_first + sample_size, total_pages)
-
-            gemini_hit = False
-            for page_idx in sample_pages:
-                img = page_to_image(pdf_bytes, page_idx)
-                qs, ws, fatal = extract_page_with_gemini(gemini_model, img, page_idx + 1)
-                if fatal:
-                    pdf.close()
-                    return fatal
-                if qs:
-                    gemini_hit = True
-                    all_questions.extend(qs)
-                    all_warnings.extend(ws)
+            if not marker_indexes:
+                # A page without a new marker may contain the continuation of
+                # the question that began on the preceding page.
+                if active_question is not None:
+                    for line in lines:
+                        _merge_line_into_question(active_question, line, page_index)
                 else:
-                    skipped_pages.append(page_idx + 1)
-
-            if not gemini_hit:
-                pdf.close()
-                return err_unreadable_file(skip_first + sample_size, total_pages)
-
-            remaining = [i for i in range(total_pages) if i not in sample_pages]
-            qs2, ws2, skipped, low_conf, gemini_model = sequential_extract(
-                pdf, pdf_bytes, remaining, gemini_model
-            )
-            all_questions.extend(qs2)
-            all_warnings.extend(ws2)
-            skipped_pages.extend(skipped)
-            low_conf_pages.extend(low_conf)
-
-        else:
-            # ── Phase 4: resume sequential from first hit ─────────────────────
-            logger.info(f"Resuming sequential from page {first_hit + 1}")
-            remaining = [i for i in range(first_hit + 1, total_pages)
-                         if i not in sample_pages]
-            qs2, ws2, skipped, low_conf, gemini_model = sequential_extract(
-                pdf, pdf_bytes, remaining, gemini_model
-            )
-            all_questions.extend(qs2)
-            all_warnings.extend(ws2)
-            skipped_pages.extend(skipped)
-            low_conf_pages.extend(low_conf)
-
-    pdf.close()
-
-    if not all_questions:
-        return err_blank_pdf()
-
-    # ── Dedup and sort ────────────────────────────────────────────────────────
-    seen = {}
-    for q in all_questions:
-        # Prefer gemini > ocr > pdfplumber for same question number
-        source_rank = {"gemini": 3, "ocr": 2, "pdfplumber": 1, "manual": 0}
-        existing    = seen.get(q["num"])
-        if not existing or source_rank.get(q["source"], 0) > source_rank.get(existing["source"], 0):
-            seen[q["num"]] = q
-
-    final = sorted(seen.values(), key=lambda q: q["num"])
-
-    # ── Build warnings ────────────────────────────────────────────────────────
-    response_warnings = []
-    if skipped_pages:
-        response_warnings.append(warn_pages_skipped(skipped_pages))
-    if low_conf_pages:
-        response_warnings.append(warn_low_confidence(low_conf_pages))
-
-    logger.info(f"Done: {len(final)} questions, {len(response_warnings)} warnings")
-
-    return {
-        "success"  : True,
-        "questions": final,
-        "meta"     : {
-            "total_questions": len(final),
-            "mcq_count"      : sum(1 for q in final if q["type"] == "mcq"),
-            "nat_count"      : sum(1 for q in final if q["type"] == "nat"),
-            "total_pages"    : total_pages,
-            "skipped_pages"  : len(skipped_pages),
-            "gemini_used"    : gemini_model is not None,
-        },
-        "warnings" : response_warnings,
-    }, 200
-
-
-def sequential_extract(
-    pdf, pdf_bytes: bytes,
-    page_range,
-    gemini_model
-) -> tuple[list[dict], list[str], list[int], list[int], object]:
-    """
-    Process pages in range:
-      coordinate parse → OCR fallback → Gemini fallback
-    Returns (questions, warnings, skipped_pages, low_conf_pages, gemini_model).
-    """
-    questions   = []
-    warnings    = []
-    skipped     = []
-    low_conf    = []
-
-    for page_idx in page_range:
-        page_num = page_idx + 1
-
-        # ── Coordinate parse ──────────────────────────────────────────────────
-        try:
-            qs, ws, rate = parse_page_with_coordinates(pdf.pages[page_idx])
-        except Exception as e:
-            logger.warning(f"Coordinate parse error page {page_num}: {e}")
-            qs, ws, rate = [], [f"Page {page_num}: coordinate parse failed"], 0.0
-
-        warnings.extend(ws)
-
-        if rate >= DETECTION_THRESHOLD and qs:
-            questions.extend(qs)
-            continue
-
-        if qs and rate > 0:
-            low_conf.append(page_num)
-            questions.extend(qs)
-            continue
-
-        # ── OCR fallback ──────────────────────────────────────────────────────
-        logger.info(f"Page {page_num}: coordinate parse rate={rate:.0%} — trying OCR")
-        try:
-            img      = page_to_image(pdf_bytes, page_idx)
-            ocr_text = ocr_page(img)
-            ocr_qs, ocr_ws = parse_ocr_text(ocr_text, page_num)
-            warnings.extend(ocr_ws)
-        except Exception as e:
-            logger.warning(f"OCR failed page {page_num}: {e}")
-            ocr_qs = []
-
-        # Estimate OCR detection rate
-        if ocr_qs:
-            ocr_rate = len(ocr_qs) / max(1, len(ocr_qs))
-            if ocr_rate >= DETECTION_THRESHOLD:
-                logger.info(f"Page {page_num}: OCR success ({len(ocr_qs)} questions)")
-                questions.extend(ocr_qs)
-                continue
-            else:
-                low_conf.append(page_num)
-                questions.extend(ocr_qs)
+                    warnings.append(f"Page {page_index + 1}: no question marker detected.")
                 continue
 
-        # ── Gemini fallback ───────────────────────────────────────────────────
-        logger.info(f"Page {page_num}: OCR failed — trying Gemini")
-        if gemini_model is None:
-            try:
-                gemini_model = init_gemini()
-            except Exception as e:
-                logger.error(f"Gemini init failed: {e}")
-                skipped.append(page_num)
-                warnings.append(f"Page {page_num}: all fallbacks failed, skipped")
+            # Lines before the first marker continue the previous question.
+            if active_question is not None:
+                for line in lines[:marker_indexes[0]]:
+                    _merge_line_into_question(active_question, line, page_index)
+
+            for marker_position, marker_index in enumerate(marker_indexes):
+                if active_question is not None:
+                    extracted.append(_finalize_question(active_question))
+                    active_question = None
+
+                marker_line = lines[marker_index]
+                number = detect_question_marker(marker_line["text"])
+                if number is None:
+                    continue
+
+                active_question = {
+                    "num": number,
+                    "lines": [],
+                    "regions_by_page": {},
+                }
+                remainder = _line_remainder(marker_line["text"], number)
+                if remainder:
+                    marker_line = dict(marker_line)
+                    marker_line["text"] = remainder
+                    _merge_line_into_question(active_question, marker_line, page_index)
+
+                next_marker = (
+                    marker_indexes[marker_position + 1]
+                    if marker_position + 1 < len(marker_indexes)
+                    else len(lines)
+                )
+                for line in lines[marker_index + 1:next_marker]:
+                    _merge_line_into_question(active_question, line, page_index)
+
+        if active_question is not None:
+            extracted.append(_finalize_question(active_question))
+
+        # Keep first occurrence of a number. Duplicate numbering is ambiguous,
+        # so flag it rather than silently merging unrelated content.
+        unique_questions: list[dict] = []
+        seen_numbers: set[int] = set()
+        for question in extracted:
+            if question["num"] in seen_numbers:
+                warnings.append(
+                    f"Question number {question['num']} appears more than once; later occurrence skipped."
+                )
                 continue
+            seen_numbers.add(question["num"])
+            if not question["text"]:
+                warnings.append(f"Question {question['num']} has no extractable text.")
+                continue
+            unique_questions.append(question)
 
-        try:
-            img = page_to_image(pdf_bytes, page_idx)
-        except Exception as e:
-            skipped.append(page_num)
-            warnings.append(f"Page {page_num}: image render failed — {e}")
-            continue
+        unique_questions.sort(key=lambda item: item["num"])
+        if not unique_questions:
+            return err_blank_pdf()
 
-        gem_qs, gem_ws, fatal = extract_page_with_gemini(gemini_model, img, page_num)
-        warnings.extend(gem_ws)
+        question_regions = [
+            {
+                "question_number": question["num"],
+                "regions": question["question_regions"],
+            }
+            for question in unique_questions
+        ]
 
-        if fatal:
-            skipped.append(page_num)
-            warnings.append(f"Page {page_num}: Gemini fatal error, skipped")
-            continue
+        return {
+            "success": True,
+            "questions": unique_questions,
+            "question_regions": question_regions,
+            "meta": {
+                "total_questions": len(unique_questions),
+                "mcq_count": sum(question["type"] == "mcq" for question in unique_questions),
+                "nat_count": sum(question["type"] == "nat" for question in unique_questions),
+                "total_pages": total_pages,
+                "text_only_extraction": True,
+            },
+            "warnings": warnings,
+        }, 200
+    finally:
+        pdf.close()
 
-        if gem_qs:
-            questions.extend(gem_qs)
-        else:
-            skipped.append(page_num)
-            warnings.append(f"Page {page_num}: all extraction methods failed")
 
-    return questions, warnings, skipped, low_conf, gemini_model
+# ---------------------------------------------------------------------------
+# Answer-key extraction retained for the existing /extract-key endpoint.
+# ---------------------------------------------------------------------------
 
-
-# ── Answer key extraction ─────────────────────────────────────────────────────
 
 def extract_answer_key(pdf_bytes: bytes) -> tuple[dict, int]:
-    """
-    Extract answer key using coordinate-based parsing first,
-    then regex on full text as fallback.
-    """
+    """Extract a simple answer-key mapping from a text-based PDF."""
     try:
         pdf = pdfplumber.open(io.BytesIO(pdf_bytes))
     except Exception:
         return err_invalid_pdf()
 
-    key      = {}
-    warnings = []
+    answer_key: dict[int, str] = {}
+    try:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            for match in re.finditer(
+                r"(?:Q\.?\s*)?(\d+)\s*[.\-:→)]\s*([A-Da-d1-4])\b",
+                text,
+            ):
+                number = int(match.group(1))
+                answer_key.setdefault(number, match.group(2).upper())
+    finally:
+        pdf.close()
 
-    for page in pdf.pages:
-        words = page.extract_words(x_tolerance=3, y_tolerance=3)
-        if not words:
-            continue
-
-        tolerance  = dynamic_line_tolerance(words)
-        boundaries = detect_columns(words, page.width)
-        for word in words:
-            word["column"] = assign_column(word["x0"], boundaries)
-        lines = group_words_into_lines(words, tolerance)
-
-        for line in lines:
-            # Match patterns like: "1. A", "Q1 - B", "(1) C", "1→D"
-            m = re.search(
-                r"(?:Q\.?\s*)?(\d+)\s*[\.\-:→\)]\s*([A-Da-d1-4])\b",
-                line["text"]
-            )
-            if m:
-                q_num = int(m.group(1))
-                ans   = m.group(2).upper()
-                if q_num not in key:
-                    key[q_num] = ans
-
-    pdf.close()
-
-    if not key:
-        # Fallback: raw text regex
-        try:
-            pdf2 = pdfplumber.open(io.BytesIO(pdf_bytes))
-            full = "".join(p.extract_text() or "" for p in pdf2.pages)
-            pdf2.close()
-            for m in re.finditer(r"(?:Q\.?\s*)?(\d+)\s*[\.\-:→\)]\s*([A-Da-d1-4])\b", full):
-                q_num = int(m.group(1))
-                if q_num not in key:
-                    key[q_num] = m.group(2).upper()
-        except Exception:
-            pass
-
-    if not key:
-        return {
-            "success"   : True,
-            "answer_key": {},
-            "meta"      : {"matched": 0},
-            "warnings"  : [warn_answer_key_partial(0, 0)],
-        }, 200
-
+    warnings = [] if answer_key else [warn_answer_key_partial(0, 0)]
     return {
-        "success"   : True,
-        "answer_key": key,
-        "meta"      : {"matched": len(key)},
-        "warnings"  : warnings,
+        "success": True,
+        "answer_key": answer_key,
+        "meta": {"matched": len(answer_key)},
+        "warnings": warnings,
     }, 200

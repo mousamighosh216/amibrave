@@ -1,7 +1,6 @@
 """
 Amibrave — Error & Warning Definitions
 All application-level errors and warnings are defined here.
-Import this module in any file that needs to raise or return errors.
 """
 
 from datetime import datetime
@@ -33,17 +32,16 @@ def _warn(code: str, message: str, detail: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# ERRORS — Fatal, terminate processing and return to client
+# Canonical README error contract
 # ---------------------------------------------------------------------------
 
-def err_file_too_large(size_mb: float):
-    """ERR_001 — Uploaded file exceeds the 10MB limit."""
+def err_file_notuploaded(size_mb: float | None = None):
+    """ERR_001 — No file uploaded."""
     return _base(
         "ERR_001",
-        "File too large.",
-        f"Uploaded file is {size_mb:.2f}MB. Maximum allowed size is 10MB. "
-        "Compress the PDF or split it into smaller parts.",
-        413
+        "No file uploaded.",
+        "No file was uploaded in the request. Ensure the form field is named 'file' and contains a valid PDF.",
+        400,
     )
 
 
@@ -52,155 +50,238 @@ def err_invalid_pdf():
     return _base(
         "ERR_002",
         "Invalid file format.",
-        "The uploaded file could not be read as a PDF. "
-        "Ensure the file is a valid .pdf document and is not corrupted.",
-        415
+        "The uploaded file could not be read as a PDF. Ensure the file is a valid .pdf document and is not corrupted.",
+        415,
     )
 
 
-def err_password_protected():
-    """ERR_003 — PDF is password protected."""
+def err_pdf_maxsize(size_mb: float | None = None):
+    """ERR_003 — PDF exceeds maximum size."""
+    size_text = f" Detected size: {size_mb:.2f}MB." if size_mb is not None else ""
     return _base(
         "ERR_003",
-        "PDF is password protected.",
-        "Amibrave cannot read encrypted or password-protected PDFs. "
-        "Remove the password protection and re-upload.",
-        422
+        "PDF exceeds maximum size.",
+        f"The uploaded PDF is larger than the allowed limit of 10MB.{size_text}",
+        422,
     )
 
 
-def err_no_pages():
-    """ERR_004 — PDF has no pages."""
+def err_file_too_large(size_mb: float | None = None):
+    """Compatibility alias for the file-size error contract."""
+    return err_pdf_maxsize(size_mb)
+
+
+def err_pdf_corrupted():
+    """ERR_004 — Corrupted or unreadable PDF."""
     return _base(
         "ERR_004",
-        "PDF appears to be empty.",
-        "The uploaded PDF contains no readable pages. "
-        "Verify the file is complete and not corrupted.",
-        422
+        "Corrupted or unreadable PDF.",
+        "The uploaded PDF contains no readable pages. Verify the file is complete and not corrupted.",
+        422,
+    )
+
+
+def err_no_extractable_questions():
+    """ERR_005 — No extractable questions detected."""
+    return _base(
+        "ERR_005",
+        "No extractable questions detected.",
+        "Amibrave could not identify enough readable question content to generate a valid exam. "
+        "Try a cleaner PDF or check whether the file is image-only or structurally unsupported.",
+        422,
     )
 
 
 def err_unreadable_file(pages_checked: int, total_pages: int):
-    """ERR_005 — 30% threshold hit, file is unreadable."""
+    """Compatibility alias for unreadable extraction failures."""
     return _base(
         "ERR_005",
-        "File could not be parsed.",
-        f"Amibrave sampled {pages_checked} of {total_pages} pages and could not "
-        "extract any readable question data. The PDF may be entirely image-based "
-        "with no embedded text. Try a digitally-created PDF for best results.",
-        422
+        "No extractable questions detected.",
+        f"Amibrave sampled {pages_checked} of {total_pages} pages and could not extract any readable question data. "
+        "The PDF may be entirely image-based or contain unsupported structure.",
+        422,
     )
 
 
-def err_gemini_failed(page_num: int, reason: str):
-    """ERR_006 — Gemini API failed on a specific fallback page."""
+def err_question_boundaries_unidentified():
+    """ERR_006 — Question boundaries could not be identified."""
     return _base(
         "ERR_006",
-        "AI fallback failed.",
-        f"Gemini could not process page {page_num}. Reason: {reason}. "
-        "Check your Gemini API key or try again.",
-        502
+        "Question boundaries could not be identified.",
+        "The document structure is too unclear to reliably separate questions and options. "
+        "Try a cleaner scan or use image-first/manual boundary review.",
+        422,
     )
 
 
-def err_gemini_quota():
-    """ERR_007 — Gemini API quota exceeded."""
+def err_image_render_failed():
+    """ERR_007 — Image rendering failed."""
     return _base(
         "ERR_007",
-        "AI quota exceeded.",
-        "The Gemini API free-tier quota has been reached. "
-        "Wait a few minutes and try again, or check your quota at "
-        "https://aistudio.google.com.",
-        429
+        "Image rendering failed.",
+        "Amibrave could not render the required question image region from the PDF. "
+        "Check whether the page content is valid and supported by the current renderer.",
+        500,
     )
 
 
-def err_blank_pdf():
-    """ERR_008 — All pages returned empty text."""
+def err_unsupported_question_structure():
+    """ERR_008 — Unsupported question structure."""
     return _base(
         "ERR_008",
-        "PDF contains no text.",
-        "Every page in the uploaded PDF returned empty content. "
-        "The file may be a blank document or contain only non-extractable elements.",
-        422
+        "Unsupported question structure.",
+        "The uploaded PDF contains a question layout that cannot be processed safely by the current parser.",
+        422,
     )
 
 
-def err_timeout():
-    """ERR_009 — Request exceeded 60 second processing limit."""
+def err_invalid_examination_submission():
+    """ERR_009 — Invalid examination submission."""
     return _base(
         "ERR_009",
-        "Processing timed out.",
-        "The PDF took longer than 60 seconds to process. "
-        "Try a smaller file or a PDF with fewer pages.",
-        504
-    )
-
-
-def err_too_many_requests():
-    """ERR_010 — Server is busy, concurrent request limit hit."""
-    return _base(
-        "ERR_010",
-        "Server is busy.",
-        "Amibrave is currently processing another request. "
-        "Please wait a moment and try again.",
-        429
+        "Invalid examination submission.",
+        "The submitted examination payload is incomplete or invalid. Verify required fields and answer data before submitting.",
+        400,
     )
 
 
 def err_server(detail: str):
-    """ERR_011 — Unexpected internal server error."""
+    """Generic fallback internal error for unexpected application failures."""
     return _base(
         "ERR_011",
         "Internal server error.",
-        f"An unexpected error occurred: {detail}. "
-        "If this persists, check server logs or file an issue.",
-        500
+        f"An unexpected error occurred: {detail}. If this persists, check server logs or file an issue.",
+        500,
+    )
+
+
+def err_timeout():
+    """Compatibility timeout response retained for backend request limits."""
+    return _base(
+        "ERR_009",
+        "Processing timed out.",
+        "The PDF took longer than 60 seconds to process. Try a smaller file or a PDF with fewer pages.",
+        504,
+    )
+
+
+def err_too_many_requests():
+    """Compatibility concurrency limit response retained for request throttling."""
+    return _base(
+        "ERR_010",
+        "Server is busy.",
+        "Amibrave is currently processing another request. Please wait a moment and try again.",
+        429,
     )
 
 
 # ---------------------------------------------------------------------------
-# WARNINGS — Non-fatal, attached to successful responses
+# README warning contract
+# ---------------------------------------------------------------------------
+
+def warn_page_contains_no_text() -> dict:
+    """WARN_001 — Page contains no extractable text."""
+    return _warn(
+        "WARN_001",
+        "Page contains no extractable text.",
+        "This page has no usable extracted text and may need to be treated as image-first content."
+    )
+
+
+def warn_question_displayed_using_image() -> dict:
+    """WARN_002 — Question is displayed using original image."""
+    return _warn(
+        "WARN_002",
+        "Question is displayed using original image.",
+        "The question was rendered from the original PDF image because extracted text was incomplete or unreliable."
+    )
+
+
+def warn_question_requires_manual_boundary_verification() -> dict:
+    """WARN_003 — Question requires manual boundary verification."""
+    return _warn(
+        "WARN_003",
+        "Question requires manual boundary verification.",
+        "The parser could not confidently determine the exact region boundaries and a manual check may be required."
+    )
+
+
+def warn_visual_content_requires_image_first() -> dict:
+    """WARN_004 — Mathematical or visual content may require image-first mode."""
+    return _warn(
+        "WARN_004",
+        "Mathematical or visual content may require image-first mode.",
+        "The content may rely on diagrams, equations, or formatting that is clearer when displayed as an original image."
+    )
+
+
+def warn_answer_key_unavailable() -> dict:
+    """WARN_005 — Answer key unavailable; automatic scoring disabled."""
+    return _warn(
+        "WARN_005",
+        "Answer key unavailable; automatic scoring disabled.",
+        "No answer key was provided or matched, so automatic correctness scoring is disabled."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible legacy aliases kept for existing callers
 # ---------------------------------------------------------------------------
 
 def warn_file_near_limit(size_mb: float) -> dict:
-    """WARN_001 — File is between 8MB and 10MB."""
+    """Legacy alias for WARN_001-style soft warning."""
     return _warn(
         "WARN_001",
-        "File is close to the size limit.",
-        f"File size is {size_mb:.2f}MB (limit: 10MB). "
-        "Processing will continue, but consider compressing for faster uploads."
+        "Page contains no extractable text.",
+        f"File size is {size_mb:.2f}MB and may be close to the practical limit for reliable parsing."
     )
 
 
 def warn_pages_skipped(skipped: list[int]) -> dict:
-    """WARN_002 — Some pages could not be processed and were skipped."""
+    """Legacy alias for image-first fallback warnings."""
     pages = ", ".join(str(p) for p in skipped)
     return _warn(
         "WARN_002",
-        f"{len(skipped)} page(s) were skipped.",
-        f"Pages {pages} could not be parsed and were excluded from results. "
-        "These pages may be image-only or contain unsupported content."
+        "Question is displayed using original image.",
+        f"Pages {pages} could not be parsed and were handled using the original image workflow."
     )
 
 
 def warn_low_confidence(pages: list[int]) -> dict:
-    """WARN_003 — Some pages parsed but with low confidence."""
+    """Legacy alias for manual verification reminders."""
     pg = ", ".join(str(p) for p in pages)
     return _warn(
         "WARN_003",
-        f"Low confidence parse on {len(pages)} page(s).",
-        f"Pages {pg} were parsed but may contain errors. "
-        "Review these questions carefully in the preview editor."
+        "Question requires manual boundary verification.",
+        f"Pages {pg} were parsed with low confidence and may require a manual review."
     )
 
 
 def warn_answer_key_partial(matched: int, total: int) -> dict:
-    """WARN_004 — Answer key only partially matched question numbers."""
+    """Legacy alias for answer-key warning."""
     return _warn(
-        "WARN_004",
-        "Answer key partially matched.",
-        f"Only {matched} of {total} questions were matched in the answer key. "
-        "Unmatched questions will not be auto-scored. "
-        "Verify the answer key format uses matching question numbers."
+        "WARN_005",
+        "Answer key unavailable; automatic scoring disabled.",
+        f"Only {matched} of {total} questions were matched in the answer key. Automatic scoring has been disabled."
     )
+
+
+def err_password_protected():
+    """Compatibility alias for encrypted PDFs."""
+    return _base(
+        "ERR_004",
+        "Corrupted or unreadable PDF.",
+        "The uploaded PDF is encrypted or protected by a password and cannot be processed without removing the password.",
+        422,
+    )
+
+
+def err_no_pages():
+    """Compatibility alias for empty document handling."""
+    return err_no_extractable_questions()
+
+
+def err_blank_pdf():
+    """Compatibility alias for empty-text extraction failure."""
+    return err_no_extractable_questions()
+
