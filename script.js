@@ -7,7 +7,7 @@
 "use strict";
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const BACKEND_URL =  "http://localhost:5000";
+const BACKEND_URL =  "https://amibrave.onrender.com";
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
@@ -296,7 +296,7 @@ async function uploadPDF(endpoint, file, onProgress) {
     xhr.open("POST", BACKEND_URL + endpoint);
     xhr.upload.addEventListener("progress", e => { if (e.lengthComputable && onProgress) onProgress(Math.round(e.loaded/e.total*100)); });
     xhr.addEventListener("load",    () => { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error("Invalid server response")); } });
-    xhr.addEventListener("error",   () => reject(new Error("Network error — is the backend running?")));
+    xhr.addEventListener("error",   () => reject(new Error("Network error — sorry for interuption")));
     xhr.addEventListener("timeout", () => reject(new Error("Request timed out")));
     xhr.timeout = 90000;
     xhr.send(form);
