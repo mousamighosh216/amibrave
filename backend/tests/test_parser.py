@@ -204,7 +204,7 @@ class ParserRegressionTests(unittest.TestCase):
             self.assertEqual(len(images), 3)
             self.assertTrue(all(Path(item["path"]).is_file() for item in images))
             self.assertTrue(
-                all(item["mime_type"] == "image/jpeg" for item in images)
+                all(item["mime_type"] == "image/png" for item in images)
             )
 
 

@@ -163,8 +163,8 @@ def render_question_images(
                         "path": str(output_path),
                         "width": pixmap.width,
                         "height": pixmap.height,
-                        "format": "JPEG",
-                        "mime_type": "image/jpeg",
+                        "format": "png",
+                        "mime_type": "image/png",
                     })
 
     except ImageRenderError:

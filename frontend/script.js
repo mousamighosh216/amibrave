@@ -23,6 +23,7 @@ const STATUS = {
 // ── App state ─────────────────────────────────────────────────────────────────
 const state = {
   questions    : [],
+  images       : [],
   answers      : {},    // { idx: ["A"] | ["3.14"] }
   statuses     : {},    // { idx: STATUS.xxx }
   marked       : {},    // { idx: true } — marked for review
@@ -123,11 +124,12 @@ async function startProcessing() {
   goScreen("s-loading");
   setLoad("Uploading PDF to server…", 10);
   try {
-    const qRes = await uploadPDF("/extract", state.qFile, pct => setLoad(`Processing PDF… ${pct}%`, 10 + pct*0.5));
+    const qRes = await uploadPDF("/api/exams/process", state.qFile, pct => setLoad(`Processing PDF… ${pct}%`, 10 + pct*0.5));
     if (!qRes.success) { toast("error", qRes.error?.message||"Server error", qRes.error?.detail||""); goScreen("s-upload"); return; }
     state.questions = qRes.questions;
+    state.images = qRes.images;
     state.warnings  = qRes.warnings || [];
-    setLoad("Questions extracted.", 65);
+    setLoad("Questions and reference image extracted.", 65);
 
     if (state.aFile) {
       setLoad("Processing answer key…", 70);
@@ -180,6 +182,7 @@ function applyAnswerKey(key) {
 // ── Preview ───────────────────────────────────────────────────────────────────
 function renderPreview() {
   const qs  = state.questions;
+  const img = state.images;
   const mcq = qs.filter(q=>q.type==="mcq").length;
   const nat = qs.filter(q=>q.type==="nat").length;
   document.getElementById("preview-stats").innerHTML = `
@@ -683,3 +686,42 @@ function renderMath() {
     });
   } catch(e) { console.warn("KaTeX:",e); }
 }
+
+
+// ── Theme switcher ────────────────────────────────────────────────────────────
+(function initThemeSwitcher() {
+  const toggle = document.getElementById("theme-toggle");
+  if (!toggle) return;
+
+  const root = document.documentElement;
+  const storageKey = "amibrave-theme";
+
+  function applyTheme(theme) {
+    const isDark = theme === "dark";
+    root.dataset.theme = isDark ? "dark" : "light";
+    toggle.setAttribute("aria-pressed", String(isDark));
+    toggle.setAttribute("aria-label", isDark ? "Switch to light theme" : "Switch to dark theme");
+    toggle.innerHTML = isDark
+      ? '<i class="ph ph-sun" aria-hidden="true"></i><span class="theme-toggle-label">Light mode</span>'
+      : '<i class="ph ph-moon" aria-hidden="true"></i><span class="theme-toggle-label">Dark mode</span>';
+  }
+
+  let savedTheme = "light";
+  try {
+    const stored = localStorage.getItem(storageKey);
+    if (stored === "dark" || stored === "light") savedTheme = stored;
+  } catch (error) {
+    console.warn("Theme preference could not be read:", error);
+  }
+  applyTheme(savedTheme);
+
+  toggle.addEventListener("click", () => {
+    const nextTheme = root.dataset.theme === "dark" ? "light" : "dark";
+    applyTheme(nextTheme);
+    try {
+      localStorage.setItem(storageKey, nextTheme);
+    } catch (error) {
+      console.warn("Theme preference could not be saved:", error);
+    }
+  });
+})();

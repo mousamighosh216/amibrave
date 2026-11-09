@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Amibrave — GATE Practice</title>
 
-  <!-- Fonts: Inter + JetBrains Mono -->
+  <!-- Fonts: Basic, Instrument Serif, Merriweather, Playwrite IE -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Basic&family=Instrument+Serif:ital@0;1&family=Merriweather:ital,opsz,wght@0,18..144,300..900;1,18..144,300..900&family=Playwrite+IE:wght@100..400&display=swap" rel="stylesheet" />
 
   <!-- Phosphor Icons -->
   <script src="https://unpkg.com/@phosphor-icons/web@2.1.1/src/index.js"></script>
@@ -25,6 +25,10 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+<button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark theme" aria-pressed="false">
+  <i class="ph ph-moon" aria-hidden="true"></i>
+  <span class="theme-toggle-label">Dark mode</span>
+</button>
 
 <!-- ── UPLOAD SCREEN ──────────────────────────────────────────────────────── -->
 <div id="s-upload" class="screen active">
@@ -272,8 +276,8 @@
       Exam Results
     </div>
     <div class="result-actions">
-      <button class="btn-nta btn-orange" onclick="downloadPDF()">
-        <i class="ph ph-download-simple" aria-hidden="true"></i> Download PDF
+      <button class="btn-nta btn-orange" onclick="downloadJSON()">
+        <i class="ph ph-download-simple" aria-hidden="true"></i> Download JSON
       </button>
       <button class="btn-nta btn-green" onclick="resetAll()">
         <i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i> Start Over
@@ -291,5 +295,6 @@
 <div class="toast-container" id="toast-container"></div>
 
 <script src="script.js"></script>
+<script src="storage.js"></script>
 </body>
 </html>

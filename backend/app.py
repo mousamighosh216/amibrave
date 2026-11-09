@@ -26,7 +26,7 @@ from errors import (
     err_image_render_failed,
     warn_file_near_limit,
 )
-from parser import extract_questions, extract_answer_key
+from parser import extract_questions
 from image_renderer import render_question_images, ImageRenderError
 
 # ---------------------------------------------------------------------------
@@ -195,7 +195,7 @@ def process_exam():
 
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
+            temp_path = Path(temp_dir) 
             pdf_path = temp_path / "source.pdf"
             image_dir = temp_path / "question-images"
             pdf_path.write_bytes(pdf_bytes)
@@ -257,50 +257,6 @@ def extract_key():
         response_body["warnings"] = upload_warnings + response_body["warnings"]
 
     return jsonify(response_body), status
-
-
-# ---------------------------------------------------------------------------
-# PDF generation endpoint
-# ---------------------------------------------------------------------------
-
-# @app.route("/generate-exam-json", methods=["POST"])
-# @with_concurrency_limit
-# # @with_timeout
-# def generate_pdf_route():
-#     """
-#     POST /generate-pdf
-#     Body: JSON payload with questions, answers, marked, statuses,
-#           marking, customMarks, timeTaken
-#     Returns: PDF file download
-#     """
-#     if not request.is_json:
-#         body, status = err_server("Request must be JSON with Content-Type: application/json")
-#         return jsonify(body), status
-
-#     payload = request.get_json(silent=True)
-#     if not payload:
-#         body, status = err_server("Empty or invalid JSON payload")
-#         return jsonify(body), status
-
-#     questions = payload.get("questions", [])
-#     if not questions:
-#         body, status = err_server("No questions in payload")
-#         return jsonify(body), status
-
-#     logger.info(f"Generating PDF: {len(questions)} questions")
-
-#     pdf_bytes, error = generate_pdf(payload)
-
-#     if (error or pdf_bytes is None):
-#         body, status = err_server(f"PDF generation failed: {error}")
-#         return jsonify(body), status
-
-#     return send_file(
-#         io.BytesIO(pdf_bytes),
-#         mimetype        = "application/pdf",
-#         as_attachment   = True,
-#         download_name   = f"amibrave_results_{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-#     )
 
 
 # ---------------------------------------------------------------------------
