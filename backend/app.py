@@ -29,11 +29,18 @@ from errors import (
 from parser import extract_questions
 from image_renderer import render_question_images, ImageRenderError
 
+print("🔥 AMIBRAVE BACKEND VERSION: CORS-DEBUG-001", flush=True)
+
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
 
 load_dotenv()
+print(
+    "🔥 RAW ALLOWED_ORIGINS:",
+    repr(os.getenv("ALLOWED_ORIGINS")),
+    flush=True
+)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -49,8 +56,7 @@ allowed_origins = [
     if origin.strip()
 ]
 
-logger.info("RAW ALLOWED_ORIGINS: %r", os.getenv("ALLOWED_ORIGINS"))
-logger.info("PARSED ALLOWED_ORIGINS: %r", allowed_origins)
+print("🔥 PARSED ORIGINS:", allowed_origins, flush=True)
 
 CORS(app, 
     origins=allowed_origins,
