@@ -155,31 +155,16 @@ http://localhost:5000
 
 ## 4. Frontend Setup
 
-The frontend does not require a build step.
+The frontend is a React application built with Vite. Run Vite so it can transform
+the JSX modules; do not serve the source with `python -m http.server`.
 
 ```bash
 cd frontend
-
-python -m http.server 5500
+npm install
+npm run dev
 ```
 
-Visit:
-
-```text
-http://localhost:5500
-```
-
-Configure the backend URL in `script.js`:
-
-```javascript
-const BACKEND_URL = "http://localhost:5000";
-```
-
-For production:
-
-```javascript
-const BACKEND_URL = "https://your-app.onrender.com";
-```
+Open the URL printed by Vite (by default, `http://localhost:5173`).
 
 ---
 

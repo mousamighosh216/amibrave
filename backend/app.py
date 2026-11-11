@@ -43,12 +43,13 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # CORS — whitelist your GitHub Pages domain and localhost for development
-ALLOWED_ORIGINS = os.getenv(
-    "ALLOWED_ORIGINS",
-    "http://localhost:5500,http://127.0.0.1:5500,https://mousamighosh216.github.io"
-).split(",")
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5500",
+    "https://mousamighosh216.github.io",
+]
 
-ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS if origin.strip()]
 CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=False)
 
 # ---------------------------------------------------------------------------
