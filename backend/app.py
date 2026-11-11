@@ -29,6 +29,7 @@ from errors import (
 from parser import extract_questions
 from image_renderer import render_question_images, ImageRenderError
 
+load_dotenv()
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
@@ -47,14 +48,11 @@ ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:5500",
-    "https://amibrave-frontend-1q0w6qwmx-mousami-ghoshs-projects.vercel.app"
+    "https://amibrave-frontend-1q0w6qwmx-mousami-ghoshs-projects.vercel.app",
+    "https://amibrave-frontend.vercel.app"
 ]
 
-CORS(
-    app,
-    resources={r"/*": {"origins": ALLOWED_ORIGINS}},
-    supports_credentials=False
-)
+CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=False)
 
 # ---------------------------------------------------------------------------
 # Constants
