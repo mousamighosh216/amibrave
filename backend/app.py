@@ -47,10 +47,14 @@ ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:5500",
-    "https://mousamighosh216.github.io",
+    "https://amibrave-frontend.vercel.app"
 ]
 
-CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=False)
+CORS(
+    app,
+    resources={r"/*": {"origins": ALLOWED_ORIGINS}},
+    supports_credentials=False
+)
 
 # ---------------------------------------------------------------------------
 # Constants
