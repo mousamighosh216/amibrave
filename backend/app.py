@@ -29,7 +29,6 @@ from errors import (
 from parser import extract_questions
 from image_renderer import render_question_images, ImageRenderError
 
-load_dotenv()
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
@@ -49,6 +48,9 @@ allowed_origins = [
     for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
     if origin.strip()
 ]
+
+logger.info("RAW ALLOWED_ORIGINS: %r", os.getenv("ALLOWED_ORIGINS"))
+logger.info("PARSED ALLOWED_ORIGINS: %r", allowed_origins)
 
 CORS(app, 
     origins=allowed_origins,
