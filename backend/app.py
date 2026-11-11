@@ -57,6 +57,10 @@ allowed_origins = [
 ]
 
 print("🔥 PARSED ORIGINS:", allowed_origins, flush=True)
+print("ENVIRONMENT KEYS:", [
+    key for key in os.environ.keys()
+    if "ORIGIN" in key.upper()
+], flush=True)
 
 CORS(app, 
     origins=allowed_origins,
